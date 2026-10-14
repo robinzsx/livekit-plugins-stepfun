@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+# .venv*/ rather than .venv/ so side-by-side version venvs (.venv1x for the
+# livekit-agents 1.x check) are covered too. uv also writes a self-ignoring
+# .gitignore inside each venv, but do not depend on that.
+.venv*/
+venv/
+dist/
+build/
+
+# Smoke-test audio output
+smoke_out/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Env
+.env
