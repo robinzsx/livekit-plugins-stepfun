@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -7,7 +8,6 @@ from collections.abc import AsyncIterator
 from typing import Any, get_args
 
 import aiohttp
-
 from livekit.agents import (
     APIConnectionError,
     APIStatusError,
@@ -28,10 +28,6 @@ from .models import (
 
 _KNOWN_TTS_VOICES = frozenset(get_args(TTSVoices))
 
-# ---------------------------------------------------------------------------
-# Credentials and endpoints
-# ---------------------------------------------------------------------------
-
 
 def resolve_api_key(api_key: str | None) -> str:
     """Explicit argument wins, then the environment variable.
@@ -49,17 +45,14 @@ def resolve_api_key(api_key: str | None) -> str:
 
 
 def resolve_cluster(cluster: Cluster | None) -> Cluster:
-    if cluster is not None:
-        return cluster
-
-    env = os.environ.get("STEPFUN_CLUSTER")
-    if env in ("international", "domestic"):
-        return env  # type: ignore[return-value]
-    if env:
-        raise ValueError(
-            f"STEPFUN_CLUSTER must be 'international' or 'domestic', got {env!r}"
-        )
-    return DEFAULT_CLUSTER
+    value = cluster if cluster is not None else os.environ.get("STEPFUN_CLUSTER")
+    if not value:
+        return DEFAULT_CLUSTER
+    if value == "international":
+        return "international"
+    if value == "domestic":
+        return "domestic"
+    raise ValueError(f"STEPFUN_CLUSTER must be 'international' or 'domestic', got {value!r}")
 
 
 def resolve_ws_base_url(base_url: str | None, cluster: Cluster) -> str:
@@ -85,30 +78,12 @@ def resolve_llm_base_url(base_url: str | None, cluster: Cluster) -> str:
 
 
 def auth_headers(api_key: str) -> dict[str, str]:
-    """The protocol requires the API key in a WebSocket header.
-
-    That carries an ecosystem limitation worth knowing: browsers cannot set
-    headers on a native WebSocket, so frontend code cannot connect directly
-    (StepFun's own Step-Realtime-Console demo has to proxy through a server for
-    exactly this reason). It is fine for a Python agent, which is a server-side
-    process, but supporting browser-based agents-js setups later will require
-    the server to accept a query parameter or an ephemeral token instead.
-    """
+    """The protocol requires the API key in a WebSocket header."""
     return {"Authorization": f"Bearer {api_key}"}
 
 
 def warn_if_voice_unavailable(voice: TTSVoices | str, cluster: Cluster) -> None:
-    """Warn when a voice is known to be domestic-only but used internationally.
-
-    No ID translation happens here, and none is needed: the international
-    catalogue is a strict subset of the domestic one rather than a different
-    naming scheme. This only turns the server's opaque `400 voice_id_invalid`
-    into something actionable ahead of the request.
-
-    Deliberately a warning rather than an error: cloned voices are
-    account-specific and will never appear in a static list, so rejecting
-    anything unrecognized here would break legitimate callers.
-    """
+    """Warn when a voice is known to be domestic-only but used internationally."""
     if cluster != "international":
         return
     if voice in INTERNATIONAL_TTS_VOICES:
@@ -131,22 +106,12 @@ def event_id() -> str:
     return shortuuid()
 
 
-# ---------------------------------------------------------------------------
-# Audio encoding
-# ---------------------------------------------------------------------------
-
-
 def pcm_to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode("utf-8")
 
 
 def b64_to_pcm(data: str) -> bytes:
     return base64.b64decode(data)
-
-
-# ---------------------------------------------------------------------------
-# Server-sent events
-# ---------------------------------------------------------------------------
 
 
 async def iter_sse_events(resp: aiohttp.ClientResponse) -> AsyncIterator[dict[str, Any]]:
@@ -174,36 +139,8 @@ async def iter_sse_events(resp: aiohttp.ClientResponse) -> AsyncIterator[dict[st
             logger.warning("stepfun: failed to decode sse payload")
 
 
-# ---------------------------------------------------------------------------
-# Error mapping
-# ---------------------------------------------------------------------------
-#
-# This table is the only input to FallbackAdapter's failover decisions. Getting
-# `retryable` wrong is worse than leaving it unset: marking an auth failure as
-# retryable makes a customer's fallback chain hammer a provider that can never
-# succeed instead of switching to the backup.
-#
-# Second rule: this plugin never retries internally. The framework already
-# retries according to APIConnectOptions.max_retry, and stacking another layer
-# on top produces multiplicative amplification (3 x 3 = 9 requests) where only
-# the framework's three attempts are visible in the logs. LiveKit hit this and
-# fixed it deliberately (PR #5335) — the OpenAI plugin now forces the SDK's
-# max_retries to 0. Our aiohttp calls configure no retries at all.
-
-#: HTTP status codes worth retrying.
-#:
-#: 400 (bad parameters), 401 (bad key), 402 (no balance), 404 (wrong path) and
-#: 451 (content moderation) all require the caller to change something, so a
-#: retry can only fail the same way.
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
-#: Error identifiers that make a 429 *non*-retryable.
-#:
-#: 429 is overloaded on this API: ordinary rate limiting (retry works), or a
-#: project/member Credit ceiling (retry cannot work until the limit is raised or
-#: the quota resets on the 1st of next month). Treating the latter as retryable
-#: would keep a FallbackAdapter chain pinned to a provider that is guaranteed to
-#: fail for the rest of the month instead of moving on.
 _QUOTA_ERROR_IDENTIFIERS = (
     "insufficient_credit",
     "project_credit_limit_exceeded",
@@ -229,9 +166,7 @@ def status_error(
     request_id: str | None = None,
     body: Any = None,
 ) -> APIStatusError:
-    retryable = status_code in _RETRYABLE_STATUS and not _is_quota_exhaustion(
-        status_code, body
-    )
+    retryable = status_code in _RETRYABLE_STATUS and not _is_quota_exhaustion(status_code, body)
     return APIStatusError(
         message,
         status_code=status_code,
@@ -249,7 +184,7 @@ async def raise_for_status(resp: aiohttp.ClientResponse) -> None:
     request_id = resp.headers.get("x-request-id")
     try:
         body = await resp.text()
-    except Exception:  # noqa: BLE001 - a failed body read must not mask the real error
+    except Exception:
         body = None
 
     raise status_error(
@@ -269,7 +204,7 @@ def translate_exception(exc: BaseException, *, context: str) -> BaseException:
     """
     if isinstance(exc, (APIStatusError, APIConnectionError, APITimeoutError)):
         return exc
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return APITimeoutError(f"{context}: timed out")
     if isinstance(exc, aiohttp.ClientResponseError):
         return status_error(
@@ -283,15 +218,7 @@ def translate_exception(exc: BaseException, *, context: str) -> BaseException:
 
 
 def translate_asr_ws_error(frame: dict[str, Any], *, context: str) -> BaseException:
-    """Translate an `error` frame from the streaming ASR WebSocket.
-
-        {"event_id": ..., "type": "error", "meta": {...},
-         "error": {"type": ..., "code": ..., "message": ..., "param": ...}}
-
-    `error.type` is one of invalid_request_error / internal_error / risk;
-    `error.code` is one of invalid_value / missing_param / internal_error /
-    max_idle_timeout / pong_timeout / risk_blocked.
-    """
+    """Translate an `error` frame from the streaming ASR WebSocket."""
     err = frame.get("error") or {}
     code = err.get("code")
     message = err.get("message") or "unknown error"
@@ -318,14 +245,7 @@ def translate_asr_ws_error(frame: dict[str, Any], *, context: str) -> BaseExcept
 
 
 def translate_tts_ws_error(frame: dict[str, Any], *, context: str) -> BaseException:
-    """Translate a `tts.response.error` frame from the streaming TTS WebSocket.
-
-        {"event_id": ..., "type": "tts.response.error",
-         "data": {"session_id": ..., "code": "503", "message": ..., "details": {...}}}
-
-    Unlike the ASR surface, `code` here is an HTTP status rendered as a string,
-    so retryability comes from the HTTP table.
-    """
+    """Translate a `tts.response.error` frame from the streaming TTS WebSocket."""
     data = frame.get("data") or {}
     raw_code = data.get("code")
     message = data.get("message") or "unknown error"

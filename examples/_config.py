@@ -1,19 +1,4 @@
-"""Configuration loading for the examples.
-
-Reads `.env.local`, then `.env`, into the process environment. Values already
-present in the environment always win, so a one-off override still works::
-
-    STEPFUN_LANGUAGE=zh python examples/voice_agent.py console
-
-Note the boundary: **the plugin itself never reads a .env file.** It only reads
-`os.environ`, which is correct for a library — silently loading files from the
-working directory would be a surprising thing for a dependency to do. Loading
-config is an application's job, so the examples do it and the plugin does not.
-
-Requires `python-dotenv`, which is what LiveKit's own starters use::
-
-    pip install 'livekit-plugins-stepfun[examples]'
-"""
+"""Configuration loading for the examples."""
 
 from __future__ import annotations
 
@@ -22,7 +7,7 @@ import pathlib
 
 try:
     from dotenv import load_dotenv
-except ImportError as exc:  # pragma: no cover - an install problem, not a code path
+except ImportError as exc:
     raise SystemExit(
         "python-dotenv is required by the examples.\n"
         "    uv pip install python-dotenv\n"
@@ -30,9 +15,6 @@ except ImportError as exc:  # pragma: no cover - an install problem, not a code 
         "    pip install 'livekit-plugins-stepfun[examples]'"
     ) from exc
 
-#: Searched in order. `.env.local` is listed first and `override=False` below
-#: means the first file to define a key wins, so local settings take precedence
-#: over the shared `.env` — matching the convention in LiveKit's starters.
 _ENV_FILES = (".env.local", ".env")
 
 
@@ -84,6 +66,5 @@ def require(name: str, *, hint: str = "") -> str:
         return value
     extra = f" {hint}" if hint else ""
     raise SystemExit(
-        f"{name} is not set.\n"
-        f"  Copy .env.example to .env and fill it in, or export {name}.{extra}"
+        f"{name} is not set.\n  Copy .env.example to .env and fill it in, or export {name}.{extra}"
     )

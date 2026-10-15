@@ -1,9 +1,4 @@
-"""Shared test doubles: a fake WebSocket and a fake connection pool.
-
-The real service stays out of the unit tests. Their value is in pinning down
-what the plugin sends and how it translates responses back, not in verifying
-the server. Integration tests live separately (see design doc section 7.2).
-"""
+"""Scripted WebSocket responses and connection-pool lifecycle tracking."""
 
 from __future__ import annotations
 
@@ -24,16 +19,7 @@ class FakeWSMessage:
 
 
 class FakeWebSocket:
-    """A good-enough stand-in for aiohttp.ClientWebSocketResponse.
-
-    - ``sent`` records every frame we emitted, in order and already JSON
-      decoded, so tests can assert on protocol behaviour.
-    - ``queue_server_event()`` preloads what the server will reply with.
-
-    ``receive()`` blocks on an empty queue rather than inventing a close, so a
-    test that forgets to queue a terminator fails as a timeout instead of
-    silently taking the "connection dropped" branch.
-    """
+    """A good-enough stand-in for aiohttp.ClientWebSocketResponse."""
 
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
@@ -65,6 +51,11 @@ class FakeWebSocket:
 
     def queue_close(self) -> None:
         self._incoming.put_nowait(FakeWSMessage(aiohttp.WSMsgType.CLOSED, None))
+
+    def queue_error(self) -> None:
+        self._incoming.put_nowait(
+            FakeWSMessage(aiohttp.WSMsgType.ERROR, ConnectionResetError("connection reset"))
+        )
 
     # -- assertion helpers -------------------------------------------------
 

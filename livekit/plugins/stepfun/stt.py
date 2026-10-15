@@ -7,8 +7,6 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
-
-from livekit import rtc
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -19,6 +17,8 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
+
+from livekit import rtc
 
 from . import _utils
 from .log import logger
@@ -41,10 +41,6 @@ from .models import (
     STTModels,
 )
 
-# Event names on the bidirectional WebSocket. Note these are *not* the names the
-# HTTP+SSE batch route uses (that one emits transcript.text.delta / .done); the
-# two surfaces have separate vocabularies and mixing them up means listening for
-# events that never arrive.
 _EV_TRANSCRIPT_DELTA = "conversation.item.input_audio_transcription.delta"
 _EV_TRANSCRIPT_COMPLETED = "conversation.item.input_audio_transcription.completed"
 _EV_SPEECH_STARTED = "input_audio_buffer.speech_started"
@@ -59,21 +55,9 @@ _EV_ERROR = "error"
 #: giving up on the connection.
 _SESSION_ACK_TIMEOUT = 10.0
 
-#: How long to keep reading after the input ends, waiting for the transcript of
-#: the audio already sent.
-#:
-#: With server VAD the server finalizes an utterance after it hears
-#: `silence_duration_ms` of silence — but once input ends it hears nothing at
-#: all rather than silence, so the final may never arrive. The stream cannot
-#: wait indefinitely for it, and cutting it off immediately would drop the last
-#: utterance of every session.
 _FINALIZE_TIMEOUT = 3.0
 
 if TYPE_CHECKING:
-    # aiohttp 3.14 made ClientWebSocketResponse generic over whether receive()
-    # decodes, and ws_connect() returns the [bool] flavour while the bare name
-    # defaults to [Literal[True]]. Aliased so the subscript stays out of
-    # runtime expressions, which older aiohttp cannot evaluate.
     _WebSocket = aiohttp.ClientWebSocketResponse[bool]
 else:
     _WebSocket = aiohttp.ClientWebSocketResponse
@@ -100,18 +84,7 @@ class _STTOptions:
 
     @property
     def deltas_are_cumulative(self) -> bool:
-        """Whether a transcription delta replaces the previous text or extends it.
-
-        `stepaudio-2.5-asr-stream` and later send the whole transcript so far on
-        every delta, corrections included, and the provider's docs say to
-        replace the displayed text wholesale. `step-asr-1.1-stream` is the
-        legacy exception that sends incremental fragments.
-
-        Cumulative is the default for anything not on that denylist, including
-        model strings this plugin has never heard of. Appending cumulative text
-        compounds every partial into garbage, so an unknown model must not fall
-        into that branch by accident.
-        """
+        """Whether a transcription delta replaces the previous text or extends it."""
         return self.model not in INCREMENTAL_DELTA_STT_MODELS
 
     @property
@@ -120,17 +93,7 @@ class _STTOptions:
 
 
 class STT(stt.STT):
-    """StepFun streaming and batch speech recognition.
-
-    Usage::
-
-        from livekit.plugins import stepfun
-
-        session = AgentSession(
-            stt=stepfun.STT(language="zh"),
-            ...
-        )
-    """
+    """StepFun streaming and batch speech recognition."""
 
     def __init__(
         self,
@@ -153,41 +116,28 @@ class STT(stt.STT):
         use_streaming: bool = True,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """
+        """Create a streaming and batch speech recognizer.
+
         Args:
-            model: Model for the bidirectional streaming endpoint. Only used
-                when `use_streaming` is True.
-            batch_model: Model for the HTTP + SSE endpoint, used by `recognize()`
-                and whenever `use_streaming` is False. Note the two endpoints
-                accept disjoint model sets: `stepaudio-3-asr-max` is documented
-                for the batch route only, and the streaming route accepts only
-                `stepaudio-2.5-asr-stream`.
-            language: Recognition language. Leaving it unset selects **English**
-                server-side — it is not inferred from the cluster, so Chinese
-                callers must pass language="zh" explicitly.
-            prompt: Context or terminology hints for streaming recognition.
-            hotwords: Hotword list for batch recognition (domestic cluster only).
-            enable_timestamp_align: Request per-word timestamps. Enabling this
-                also flips `aligned_transcript` to "word", which is what turns
-                on LiveKit's adaptive interruption. Streaming only.
-            server_vad: Let the server detect utterance boundaries and emit
-                speech_started / speech_stopped. When disabled, nothing is
-                segmented automatically and this plugin commits each utterance
-                itself on flush. Streaming only.
-            use_streaming: Whether to advertise native streaming recognition.
-
-                Set False to run the HTTP + SSE route instead, which is the only
-                way to use `batch_model` in a live conversation. The framework
-                then wraps this STT in a `stt.StreamAdapter`, which buffers each
-                utterance until the local VAD reports end of speech and sends it
-                as a single request — so an `AgentSession` must be given a `vad`
-                or it raises.
-
-                The cost is latency and interim transcripts: nothing is
-                recognized until the user stops talking, and the adapter
-                declares `interim_results=False`, so there is no partial
-                transcript to drive preemptive generation. Prefer the default
-                unless the batch model's accuracy is worth that.
+            model: WebSocket model ID.
+            batch_model: HTTP + SSE model used by recognize() and batch sessions.
+            language: Recognition language; the service defaults to English.
+            api_key: API key, falling back to STEPFUN_API_KEY.
+            cluster: international or domestic; defaults to STEPFUN_CLUSTER,
+                then international. Credentials are cluster-specific.
+            base_url: Override the WebSocket base URL.
+            http_base_url: Override the HTTP base URL.
+            sample_rate: Streaming input rate; LiveKit resamples incoming audio.
+            prompt: Context hints for streaming recognition.
+            hotwords: Batch recognition hints on the domestic cluster.
+            enable_itn: Enable inverse text normalization.
+            enable_timestamp_align: Request word alignment on supported streaming models.
+            server_vad: Use server endpointing. Disable for manual flush() commits.
+            vad_silence_duration_ms: Server VAD silence window.
+            vad_threshold: Server VAD detection threshold.
+            use_streaming: Set False for VAD-segmented batch recognition; AgentSession
+                then requires a local vad to create a StreamAdapter.
+            http_session: Caller-owned session; otherwise use the LiveKit job session.
         """
         resolved_cluster = _utils.resolve_cluster(cluster)
         aligned: Literal["word", False] = (
@@ -199,26 +149,11 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=use_streaming,
-                # The batch route returns incremental SSE deltas, but
-                # StreamAdapter discards them and surfaces only the final
-                # transcript, so claiming interim results here would be a lie.
                 interim_results=use_streaming,
-                # The batch SSE route works either way, so callers can reuse one
-                # instance for offline work and FallbackAdapter has somewhere to
-                # go when streaming fails.
                 offline_recognize=True,
                 # Not supported on the streaming endpoint.
                 diarization=False,
-                # Tri-state: Literal["word", "chunk", False].
-                #
-                # Known framework bug worth noting for callers: stt.FallbackAdapter
-                # omits aligned_transcript when building its own capabilities, so
-                # wrapping this STT in one silently drops word alignment
-                # (livekit/agents issue #5436). stt.StreamAdapter omits it too.
                 aligned_transcript=aligned,
-                # The streaming endpoint takes free-text `prompt` hints rather
-                # than a keyterm list, so the framework's keyterm hook is not
-                # wired up. Pass prompt=... instead.
                 keyterms=False,
                 # Streaming ASR does not consume conversation context.
                 chat_context=False,
@@ -258,23 +193,15 @@ class STT(stt.STT):
         )
 
         self._session = http_session
-        self._owns_session = http_session is None
         self._streams = weakref.WeakSet[RecognizeStream]()
         self._pool = utils.ConnectionPool[_WebSocket](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            # The endpoint documents no idle timeout value, only a
-            # max_idle_timeout error code proving one exists, so prewarmed
-            # connections are retired conservatively.
             max_session_duration=STT_MAX_SESSION_DURATION,
         )
 
     @property
     def model(self) -> str:
-        # Report whichever endpoint is actually serving recognition. The two
-        # routes take disjoint model sets, and stt.StreamAdapter delegates this
-        # property to the wrapped STT, so returning the streaming model while
-        # the batch route does the work would mislabel every metric.
         if not self._use_streaming:
             return str(self._opts.batch_model)
         return str(self._opts.model)
@@ -290,16 +217,13 @@ class STT(stt.STT):
             # Reuse the framework's session: it pools connections and is scoped
             # to the job lifecycle.
             self._session = utils.http_context.http_session()
-            self._owns_session = False
         return self._session
 
     async def _connect_ws(self, timeout: float) -> _WebSocket:
         url = f"{self._opts.ws_base_url}{STT_STREAM_PATH}"
         try:
             return await asyncio.wait_for(
-                self._ensure_session().ws_connect(
-                    url, headers=_utils.auth_headers(self._api_key)
-                ),
+                self._ensure_session().ws_connect(url, headers=_utils.auth_headers(self._api_key)),
                 timeout,
             )
         except Exception as exc:
@@ -323,10 +247,7 @@ class STT(stt.STT):
 
         await self._pool.aclose()
 
-        # Only close a session we created ourselves. Closing one that was passed
-        # in is a common way for plugins to break their callers.
-        if self._owns_session and self._session is not None:
-            await self._session.close()
+        # Both caller-supplied and job-scoped HTTP sessions have external owners.
         self._session = None
 
     # -- configuration -----------------------------------------------------
@@ -338,15 +259,7 @@ class STT(stt.STT):
         language: NotGivenOr[Language | str] = NOT_GIVEN,
         prompt: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
-        """Update options in place.
-
-        This mutates the shared self._opts while one instance is reused across
-        many conversation turns. RecognizeStream therefore snapshots _opts in its
-        constructor rather than reading it lazily in _run(); reading it lazily
-        races with the next update_options() call and shows up as intermittently
-        using the previous turn's configuration, which is very hard to
-        reproduce.
-        """
+        """Update options in place."""
         if is_given(model):
             self._opts.model = model
             self._capabilities.aligned_transcript = (
@@ -370,9 +283,6 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> RecognizeStream:
         if not self._use_streaming:
-            # Declaring streaming=False and then serving a stream anyway would
-            # make the capability flag a lie, and would quietly send audio to
-            # the streaming endpoint with a model it does not accept.
             raise RuntimeError(
                 "this STT was constructed with use_streaming=False, so it has no "
                 "streaming transport. Either construct it with use_streaming=True, "
@@ -423,10 +333,6 @@ class STT(stt.STT):
                 "data": _utils.pcm_to_b64(frame.data.tobytes()),
                 "input": {
                     "transcription": transcription,
-                    # rate/bits/channel are mandatory for raw PCM. Taking them
-                    # from the frame rather than from opts.sample_rate matters:
-                    # the batch path receives whatever the caller buffered, with
-                    # no resampling in between.
                     "format": {
                         "type": "pcm",
                         "codec": PCM_CODEC,
@@ -495,9 +401,7 @@ class STT(stt.STT):
                 stt.SpeechData(
                     # This route echoes no detected language, so report what was
                     # asked for; English is the server-side default.
-                    language=LanguageCode(
-                        opts.language if is_given(opts.language) else "en"
-                    ),
+                    language=LanguageCode(opts.language if is_given(opts.language) else "en"),
                     text=text,
                 )
             ],
@@ -537,9 +441,6 @@ class RecognizeStream(stt.RecognizeStream):
         opts: _STTOptions,
         conn_options: APIConnectOptions,
     ) -> None:
-        # Hand sample_rate to the base class: it wires up an rtc.AudioResampler
-        # inside push_frame() to downsample the 48kHz WebRTC audio to whatever
-        # rate we need. Do not build a second resampler here.
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
 
         self._stt_impl = stt
@@ -548,29 +449,23 @@ class RecognizeStream(stt.RecognizeStream):
         self._interim_texts: dict[str, str] = {}
         self._input_done = False
 
-        # RECOGNITION_USAGE is the *only* trigger for STTMetrics in streaming
-        # mode — the base class's _metrics_monitor_task listens for that event
-        # alone to build STTMetrics and fire metrics_collected. Not emitting it
-        # means no STT metrics for the entire session (the Azure plugin hit
-        # exactly this, issue #6151).
-        #
-        # Accumulated by hand rather than with a helper: utils.PeriodicCollector
-        # existed in 1.x and was removed in 2.x. Reporting on each final (and
-        # once more at close) also lines usage up with conversation turns, which
-        # a wall-clock timer would not.
         self._audio_duration = 0.0
         self._pending_tokens = (0, 0)
 
     # -- main loop ---------------------------------------------------------
 
     async def _run(self) -> None:
+        try:
+            await self._run_impl()
+        except Exception as exc:
+            raise _utils.translate_exception(exc, context="stepfun stt stream") from exc
+
+    async def _run_impl(self) -> None:
         self._request_id = utils.shortuuid()
         self._interim_texts.clear()
         self._input_done = False
 
-        async with self._stt_impl._pool.connection(
-            timeout=self._conn_options.timeout
-        ) as ws:
+        async with self._stt_impl._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._report_connection_acquired(
                 self._stt_impl._pool.last_acquire_time,
                 self._stt_impl._pool.last_connection_reused,
@@ -579,6 +474,7 @@ class RecognizeStream(stt.RecognizeStream):
             try:
                 await self._configure_session(ws)
             except BaseException:
+                await ws.close()
                 self._stt_impl._pool.remove(ws)
                 raise
 
@@ -586,38 +482,23 @@ class RecognizeStream(stt.RecognizeStream):
                 asyncio.create_task(self._send_task(ws), name="stepfun_stt_send"),
                 asyncio.create_task(self._recv_task(ws), name="stepfun_stt_recv"),
             ]
-            # Side task, not part of the gather: it sleeps between pings, so
-            # waiting on it would hold teardown open for a whole ping interval
-            # after the stream is otherwise finished. A ping failure means a
-            # broken socket, which _recv_task reports anyway.
-            keepalive = asyncio.create_task(
-                self._keepalive_task(ws), name="stepfun_stt_keepalive"
-            )
+            keepalive = asyncio.create_task(self._keepalive_task(ws), name="stepfun_stt_keepalive")
             try:
-                # Not gather(): _recv_task only returns when the socket closes,
-                # and with server VAD the server keeps the session open for more
-                # utterances rather than closing after a final. Waiting for both
-                # therefore hangs forever once input ends. Wait for whichever
-                # finishes first, then give the receive side a bounded grace
-                # period to deliver the transcript for the audio already sent.
                 await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
                 send_task, recv_task = tasks
                 if send_task.done() and not recv_task.done():
+                    # Surface a failed upload immediately instead of waiting for a final.
+                    send_task.result()
                     await asyncio.wait([recv_task], timeout=_FINALIZE_TIMEOUT)
             finally:
                 await utils.aio.cancel_and_wait(*tasks, keepalive)
 
-                # The socket carries per-utterance state (buffered audio, item
-                # ids) with no documented reset, so it is not safe to hand to
-                # the next stream. Drop it and re-arm the pool so the next
-                # stream still starts from a completed handshake.
+                # Discarding a pooled connection does not close it immediately.
+                await ws.close()
                 self._stt_impl._pool.remove(ws)
                 self._stt_impl._pool.prewarm()
 
-            # Surface a failure from either task; the framework then retries
-            # according to conn_options.max_retry. This plugin performs no
-            # retries of its own — see the note in _utils.
             for task in tasks:
                 if not task.cancelled():
                     task.result()
@@ -672,7 +553,7 @@ class RecognizeStream(stt.RecognizeStream):
         # surfaces as a configuration error rather than as silence.
         try:
             await asyncio.wait_for(self._await_session_ack(ws), _SESSION_ACK_TIMEOUT)
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise APIConnectionError(
                 "stepfun stt: timed out waiting for session.update acknowledgement"
             ) from exc
@@ -693,6 +574,9 @@ class RecognizeStream(stt.RecognizeStream):
                     f"model (model={self._opts.model!r}) or audio format — "
                     "rather than a network problem."
                 )
+            if msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"stepfun stt: websocket error: {msg.data}")
+
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
 
@@ -708,9 +592,7 @@ class RecognizeStream(stt.RecognizeStream):
                 )
                 return
             if etype == _EV_ERROR:
-                raise _utils.translate_asr_ws_error(
-                    event, context="stepfun stt session.update"
-                )
+                raise _utils.translate_asr_ws_error(event, context="stepfun stt session.update")
             # session.created can arrive unprompted before our ack; anything
             # else at this stage is noise.
             logger.debug("stepfun stt: ignoring event during setup", extra={"type": etype})
@@ -746,10 +628,6 @@ class RecognizeStream(stt.RecognizeStream):
                         {
                             "event_id": _utils.event_id(),
                             "type": "input_audio_buffer.append",
-                            # Raw PCM16, matching the format declared in
-                            # session.update. (The provider's field note says
-                            # "WAV" here while its format block specifies PCM —
-                            # the declared format is the consistent reading.)
                             "audio": _utils.pcm_to_b64(frame.data.tobytes()),
                         }
                     )
@@ -762,37 +640,12 @@ class RecognizeStream(stt.RecognizeStream):
         await self._maybe_commit(ws)
 
     async def _maybe_commit(self, ws: _WebSocket) -> None:
-        """Tell the server the current utterance is finished.
-
-        Only sent when server VAD is off, per the documented guidance: with
-        turn_detection=server_vad the server owns segmentation, and committing
-        there would compete with it.
-
-        Both modes finalize correctly, verified against the live service:
-
-          * server_vad=True — the server finalizes once it *hears*
-            `silence_duration_ms` of silence. A final arrived 1372ms after the
-            last word (the server's own 800ms silence window plus processing).
-            This is the `AgentSession` mode: the framework never calls flush()
-            on a natively streaming STT, so nothing would ever commit with
-            server VAD off, but a live microphone supplies the silence the
-            server is waiting for.
-          * server_vad=False — flush() commits and the final arrived 438ms
-            later. This is the mode for driving `stream()` yourself.
-
-        One consequence worth knowing: server VAD needs *audio* containing
-        silence, not an absence of audio. A caller that stops sending the
-        instant the speaker stops talking gives it nothing to detect and never
-        sees a final. That is a property of silence detection, not a server
-        defect — a real microphone keeps streaming.
-        """
+        """Tell the server the current utterance is finished."""
         if self._opts.server_vad or not self._uncommitted_audio:
             return
 
         await ws.send_str(
-            json.dumps(
-                {"event_id": _utils.event_id(), "type": "input_audio_buffer.commit"}
-            )
+            json.dumps({"event_id": _utils.event_id(), "type": "input_audio_buffer.commit"})
         )
         self._uncommitted_audio = False
 
@@ -821,6 +674,9 @@ class RecognizeStream(stt.RecognizeStream):
                     "stepaudio-2.5-asr-stream only."
                 )
 
+            if msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"stepfun stt: websocket error: {msg.data}")
+
             if msg.type != aiohttp.WSMsgType.TEXT:
                 logger.debug("stepfun stt: unexpected ws frame type %s", msg.type)
                 continue
@@ -847,10 +703,6 @@ class RecognizeStream(stt.RecognizeStream):
             self._handle_completed(event)
             return
 
-        # Genuine server-side VAD events, so translating them does not violate
-        # the "never fabricate VAD" rule: nothing here is inferred from
-        # client-side energy detection, which would fight silero.VAD and the
-        # turn detector in a mixed setup. They only exist when server VAD is on.
         if etype == _EV_SPEECH_STARTED:
             self._event_ch.send_nowait(
                 stt.SpeechEvent(
@@ -890,17 +742,11 @@ class RecognizeStream(stt.RecognizeStream):
         if not interim_text:
             return
 
-        # `stash` holds the trailing characters the server may still rewrite, so
-        # everything before it is settled. That is exactly what
-        # PREFLIGHT_TRANSCRIPT is for: stable enough for preemptive generation
-        # while the rest of the utterance is still in flux.
         stash = event.get("stash") or ""
         if stash and interim_text.endswith(stash):
             stable = interim_text[: -len(stash)]
             if stable:
-                self._emit(
-                    stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, stable, event, words=None
-                )
+                self._emit(stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, stable, event, words=None)
 
         self._emit(
             stt.SpeechEventType.INTERIM_TRANSCRIPT,
@@ -931,16 +777,7 @@ class RecognizeStream(stt.RecognizeStream):
         self._report_usage()
 
     def _timed_words(self, event: dict[str, Any]) -> list[TimedString] | None:
-        """Translate the per-word `words` array, when timestamp alignment is on.
-
-        Entries look like {"word", "start", "end", "final"} with start/end as
-        floats in seconds. A `final` of false means the word sits in the stash
-        region and its timing is still an estimate, so those are skipped rather
-        than published as if they were settled.
-
-        start_time_offset anchors the words against the session timeline, which
-        the base class maintains across reconnects.
-        """
+        """Translate the per-word `words` array, when timestamp alignment is on."""
         raw = event.get("words")
         if not raw or not self._opts.timestamps_available:
             return None
@@ -976,11 +813,7 @@ class RecognizeStream(stt.RecognizeStream):
                     stt.SpeechData(
                         language=LanguageCode(
                             raw.get("language")
-                            or (
-                                self._opts.language
-                                if is_given(self._opts.language)
-                                else "en"
-                            )
+                            or (self._opts.language if is_given(self._opts.language) else "en")
                         ),
                         text=text,
                         words=words,
@@ -1021,15 +854,7 @@ class RecognizeStream(stt.RecognizeStream):
     # -- keepalive ---------------------------------------------------------
 
     async def _keepalive_task(self, ws: _WebSocket) -> None:
-        """Keep the socket alive through long silences.
-
-        The endpoint exposes `max_idle_timeout` and `pong_timeout` error codes,
-        which prove both an idle timeout and a heartbeat exist, but documents
-        neither the interval nor a keepalive frame format. WebSocket-level pings
-        are the portable choice; the interval is deliberately short.
-
-        Runs until cancelled by _run().
-        """
+        """Keep the socket alive through long silences."""
         while True:
             await asyncio.sleep(10.0)
             await ws.ping()

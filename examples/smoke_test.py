@@ -1,37 +1,4 @@
-"""Real-service smoke test for StepFun ASR + TTS. Needs a key and network.
-
-Exercises all five code paths against the live API and closes the loop: TTS
-synthesizes a phrase, then ASR transcribes that same audio back, so nothing
-here needs a microphone or a LiveKit server.
-
-    export STEPFUN_API_KEY=...            # or put it in a .env file alongside
-    python examples/smoke_test.py
-    python examples/smoke_test.py --cluster domestic --language zh
-
-What each check is actually for:
-
-1. **One-shot TTS (HTTP, WAV).** The WAV header carries the true sample rate and
-   channel count, so this is the measurement everything else is compared
-   against.
-2. **Streaming TTS (WebSocket, raw PCM).** Raw PCM has no header, so the rate we
-   declare is load-bearing. If check 1 and check 2 disagree on duration for the
-   same text, the declared `sample_rate` or `num_channels` is wrong — the
-   failure mode that raises no error and only sounds like the wrong pitch.
-   This is also where TTFB is measured.
-3. **Streaming ASR (WebSocket).** Confirms session.update is accepted, and that
-   interim transcripts are revised in place rather than visibly doubling, which
-   is what cumulative deltas look like when mishandled.
-4. **Batch ASR (HTTP + SSE).** The path `offline_recognize=True` promises, and
-   the one `FallbackAdapter` falls back to.
-5. **LLM chat.** Streaming text and tool calling over the OpenAI-compatible
-   endpoint. On reasoning models it also checks the claim this plugin relies
-   on: that `reasoning` never reaches the spoken text. `reasoning_tokens` in
-   the usage block proves the model *did* reason, so clean content alongside a
-   non-zero count means the separation is real rather than assumed.
-
-Audio is written to ./smoke_out/ so you can listen to it — a pitch problem is
-instantly obvious by ear even when the numbers look plausible.
-"""
+"""Real-service smoke test for StepFun ASR + TTS. Needs a key and network."""
 
 from __future__ import annotations
 
@@ -83,10 +50,7 @@ def describe(label: str, frames: list[rtc.AudioFrame]) -> float:
     rate = frames[0].sample_rate
     channels = frames[0].num_channels
     duration = samples / rate if rate else 0.0
-    print(
-        f"  {label}: {duration:.2f}s  rate={rate}  channels={channels}  "
-        f"frames={len(frames)}"
-    )
+    print(f"  {label}: {duration:.2f}s  rate={rate}  channels={channels}  frames={len(frames)}")
     return duration
 
 
@@ -177,9 +141,6 @@ async def stt_streaming(
 
     from livekit.plugins.stepfun import stt as _stt_impl
 
-    # The plugin stops reading this long after input ends. Widen it to find out
-    # whether a final ever arrives and how late — that is the number turn-taking
-    # actually depends on, and it cannot be measured with a short grace period.
     _stt_impl._FINALIZE_TIMEOUT = finalize_timeout
 
     stream = stt.stream(conn_options=NO_RETRY)
@@ -197,11 +158,6 @@ async def stt_streaming(
 
         speech_ended_at = time.perf_counter()
 
-        # A real microphone does not stop sending audio when the speaker stops
-        # talking — it sends silence, which is what server VAD listens for.
-        # Cutting the stream off at the last word gives the server no silence
-        # to detect, so it never finalizes. Pad the tail to reproduce what a
-        # live call actually looks like.
         for frame in _silence_frames(frames[0], trailing_silence):
             stream.push_frame(frame)
             await asyncio.sleep(frame.samples_per_channel / frame.sample_rate)
@@ -251,9 +207,6 @@ async def stt_streaming(
     print("  ^ check these are REVISED in place, not visibly doubling —")
     print("    doubling means cumulative deltas are being appended.")
     if not finals:
-        # With server VAD the server finalizes after hearing silence; once input
-        # ends it hears nothing at all, so the final may never come. Saying so
-        # beats printing interims and looking successful.
         raise RuntimeError(
             f"no FINAL_TRANSCRIPT arrived within {finalize_timeout:.0f}s of input ending; "
             "check the trailing silence and server VAD configuration"
@@ -284,9 +237,7 @@ async def lookup_order(order_id: str) -> str:
     return f"Order {order_id}: shipped, arriving Thursday."
 
 
-async def llm_chat(
-    model: str, reasoning_effort: str, api_key: str, cluster: str | None
-) -> None:
+async def llm_chat(model: str, reasoning_effort: str, api_key: str, cluster: str | None) -> None:
     """One streaming completion, plus one tool round trip."""
     print(f"\n[5] LLM chat — {model}")
 
@@ -316,12 +267,9 @@ async def llm_chat(
                         continue
                     if first_token is None:
                         first_token = time.perf_counter() - started
-                        # On a reasoning model the thinking happens before this,
-                        # so this is time to first *speakable* content — the
-                        # number that matters for voice.
                         print(f"  first speakable token: {first_token * 1000:.0f}ms")
                     text += delta.content
-        except Exception as exc:  # noqa: BLE001 - report and move to the next model
+        except Exception as exc:
             print(f"  FAILED: {type(exc).__name__}: {exc}")
             return
 
@@ -350,7 +298,7 @@ async def llm_chat(
                     if chunk.delta and chunk.delta.tool_calls:
                         for call in chunk.delta.tool_calls:
                             calls.append(f"{call.name}({call.arguments})")
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"  tool call FAILED: {type(exc).__name__}: {exc}")
             return
 
@@ -370,17 +318,19 @@ async def main() -> None:
         choices=["international", "domestic"],
         default=get("STEPFUN_CLUSTER"),
     )
-    parser.add_argument("--language", default=None, help="zh, en, ja, ko, fr, es")
-    parser.add_argument("--voice", default=None)
-    parser.add_argument("--tts-model", default=None)
+    parser.add_argument(
+        "--language", default=get("STEPFUN_LANGUAGE"), help="zh, en, ja, ko, fr, es"
+    )
+    parser.add_argument("--voice", default=get("STEPFUN_TTS_VOICE"))
+    parser.add_argument("--tts-model", default=get("STEPFUN_TTS_MODEL"))
     parser.add_argument(
         "--stt-model",
-        default=None,
+        default=get("STEPFUN_ASR_MODEL"),
         help="streaming ASR model; the endpoint accepts stepaudio-2.5-asr-stream only",
     )
     parser.add_argument(
         "--batch-model",
-        default=None,
+        default=get("STEPFUN_BATCH_ASR_MODEL"),
         help="batch ASR model used by recognize(), e.g. stepaudio-3-asr-max",
     )
     parser.add_argument(
@@ -404,14 +354,14 @@ async def main() -> None:
     )
     parser.add_argument(
         "--llm-model",
-        default="step-3.7-flash",
+        default=get("STEPFUN_LLM_MODEL", "step-3.7-flash"),
         help="comma-separated chat models to try in turn, e.g. "
         "step-3.7-flash,step-5-preview. Pass 'none' to skip.",
     )
     parser.add_argument(
         "--reasoning-effort",
         choices=["low", "medium", "high"],
-        default="low",
+        default=get("STEPFUN_REASONING_EFFORT", "low"),
         help="lower effort means less silence before the reply starts",
     )
     parser.add_argument("--verbose", action="store_true")
@@ -424,11 +374,12 @@ async def main() -> None:
     api_key = load_key()
     text = TEXT_ZH if args.language == "zh" else TEXT_EN
 
-    # The plugin would otherwise reach for utils.http_context.http_session(),
-    # which only exists inside a worker job. Supplying our own also exercises
-    # the "must not close a caller's session" contract.
     async with aiohttp.ClientSession() as session:
-        tts_kwargs = {"api_key": api_key, "cluster": args.cluster, "http_session": session}
+        tts_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "cluster": args.cluster,
+            "http_session": session,
+        }
         if args.voice:
             tts_kwargs["voice"] = args.voice
         if args.tts_model:
@@ -436,7 +387,7 @@ async def main() -> None:
         if args.language:
             tts_kwargs["language"] = args.language
 
-        tts = stepfun.TTS(**tts_kwargs)  # type: ignore[arg-type]
+        tts = stepfun.TTS(**tts_kwargs)
         stt_kwargs: dict[str, Any] = {
             "api_key": api_key,
             "cluster": args.cluster,
@@ -467,7 +418,7 @@ async def main() -> None:
         try:
             voices = await tts.list_voices()
             print(f"  {voices.get('voices')}")
-        except Exception as exc:  # noqa: BLE001 - informational only
+        except Exception as exc:
             print(f"  could not list voices: {type(exc).__name__}: {exc}")
 
         oneshot = await tts_oneshot(tts, text)
@@ -484,9 +435,7 @@ async def main() -> None:
 
         # Transcribe the one-shot audio: it is the self-describing one, so a
         # bad transcript points at ASR rather than at a format mistake.
-        await stt_streaming(
-            stt, oneshot, args.finalize_timeout, args.trailing_silence
-        )
+        await stt_streaming(stt, oneshot, args.finalize_timeout, args.trailing_silence)
         await stt_batch(stt, oneshot)
 
         await tts.aclose()

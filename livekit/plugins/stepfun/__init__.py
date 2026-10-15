@@ -21,23 +21,12 @@ from .stt import STT, RecognizeStream, SpeechStream
 from .tts import TTS, ChunkedStream, SynthesizeStream
 from .version import __version__
 
-# Imported eagerly when the optional dependency is present, and only then.
-#
-# Eagerly matters: `livekit.plugins.openai` calls Plugin.register_plugin() at
-# import time, and the framework requires that to happen on the main thread.
-# Deferring this import to first use meant it ran inside a job task instead,
-# where it raised "Plugins must be registered on the main thread" — so a lazy
-# import broke the exact case this plugin exists for.
-#
-# Guarded rather than unconditional so the ASR and TTS components, which have
-# no such dependency, still import without the `llm` extra installed. On
-# failure the module __getattr__ below re-raises with installation
-# instructions.
+# Register the optional OpenAI plugin on the importing thread, before jobs start.
 try:
     from .llm import LLM
 
     _LLM_IMPORT_ERROR: ImportError | None = None
-except ImportError as exc:  # pragma: no cover - depends on what is installed
+except ImportError as exc:
     _LLM_IMPORT_ERROR = exc
 
 if TYPE_CHECKING:

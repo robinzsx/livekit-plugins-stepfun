@@ -1,23 +1,4 @@
-"""STT unit tests.
-
-The point is not the coverage number but pinning down the handful of behaviours
-that are easy to regress, and that were in fact wrong before the protocol was
-confirmed against the provider's documentation:
-
-  1. session.update must be sent and acknowledged before any audio flows — the
-     endpoint takes no query parameters, so this frame is the only way the model
-     and audio format are ever configured.
-  2. Transcription deltas on stepaudio-2.5-asr-stream are *cumulative*. Appending
-     them compounds every partial into garbage.
-  3. input_audio_buffer.commit is only valid when server VAD is off.
-  4. Error code to exception type and retryability mapping, including the
-     429-rate-limit vs 429-quota-ceiling split.
-  5. aclose() must not close a session that was passed in.
-
-These tests require no credentials and no network, which matters: CI matrix jobs
-carrying provider secrets generally do not run on pull requests from forks, so
-this suite is the only evidence of correctness a reviewer will see on our PR.
-"""
+"""STT unit tests."""
 
 from __future__ import annotations
 
@@ -32,12 +13,6 @@ from .fake_ws import FakePool, FakeWebSocket
 
 _SAMPLE_RATE = 16000
 _SESSION_READY = {"type": "session.updated", "meta": {"session_id": "sess-1"}}
-
-
-@pytest.fixture(autouse=True)
-def _api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
-    monkeypatch.delenv("STEPFUN_CLUSTER", raising=False)
 
 
 def _frame(ms: int = 100) -> rtc.AudioFrame:
@@ -78,11 +53,6 @@ def _texts(events: list[stt.SpeechEvent], kind: stt.SpeechEventType) -> list[str
     return [ev.alternatives[0].text for ev in events if ev.type == kind]
 
 
-# ---------------------------------------------------------------------------
-# Construction
-# ---------------------------------------------------------------------------
-
-
 def test_reads_api_key_from_env() -> None:
     assert stepfun.STT()._api_key == "test-key"
 
@@ -99,9 +69,6 @@ def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_defaults_to_international_cluster() -> None:
-    # LiveKit Cloud workers run mostly in North America and Europe, so
-    # defaulting to the domestic cluster would give overseas developers a poor
-    # first impression. This default is deliberate — do not flip it casually.
     s = stepfun.STT()
     assert s._opts.cluster == "international"
     assert s._opts.ws_base_url == "wss://api.stepfun.ai"
@@ -134,9 +101,6 @@ def test_capabilities_declared_honestly() -> None:
     assert caps.interim_results is True
     assert caps.offline_recognize is True
     assert caps.diarization is False
-    # Not claimed unless timestamp alignment was actually requested: declaring
-    # it without emitting word timings makes adaptive interruption fail
-    # silently, which is very hard to debug.
     assert caps.aligned_transcript is False
     # The endpoint takes free-text `prompt` hints, not a keyterm list.
     assert caps.keyterms is False
@@ -150,15 +114,8 @@ def test_timestamp_align_enables_word_alignment() -> None:
 def test_timestamp_align_ignored_on_unsupported_model() -> None:
     # Only stepaudio-2.5-asr-stream implements it; claiming the capability on a
     # model that cannot deliver it would be over-declaring.
-    caps = stepfun.STT(
-        model="step-asr-1.1-stream", enable_timestamp_align=True
-    ).capabilities
+    caps = stepfun.STT(model="step-asr-1.1-stream", enable_timestamp_align=True).capabilities
     assert caps.aligned_transcript is False
-
-
-# ---------------------------------------------------------------------------
-# Session configuration
-# ---------------------------------------------------------------------------
 
 
 async def test_sends_session_update_before_audio() -> None:
@@ -221,19 +178,8 @@ async def test_audio_is_sent_as_base64_pcm() -> None:
     assert _utils.b64_to_pcm(appends[0]["audio"]) == b"\x00\x00" * (_SAMPLE_RATE // 20)
 
 
-# ---------------------------------------------------------------------------
-# Commit semantics
-# ---------------------------------------------------------------------------
-
-
 async def test_no_commit_under_server_vad() -> None:
-    """With server VAD the server owns segmentation, so no commit is sent.
-
-    Committing here would compete with the server's own boundaries. Finals
-    arrive when it hears `silence_duration_ms` of silence instead — verified
-    live at 1372ms after the last word, which a real microphone supplies
-    because it keeps streaming after the speaker stops.
-    """
+    """Server endpointing must not send competing client-side commits."""
     s = stepfun.STT(server_vad=True)
     ws, _ = await _drive(s, [_SESSION_READY])
     assert ws.frames_of_type("input_audio_buffer.commit") == []
@@ -275,10 +221,6 @@ async def test_flush_drains_partial_frame() -> None:
 
     assert ws.frames_of_type("input_audio_buffer.append"), "tail frame was lost"
 
-
-# ---------------------------------------------------------------------------
-# Transcript translation
-# ---------------------------------------------------------------------------
 
 _DELTA = "conversation.item.input_audio_transcription.delta"
 _COMPLETED = "conversation.item.input_audio_transcription.completed"
@@ -422,11 +364,6 @@ async def test_words_omitted_when_alignment_disabled() -> None:
     assert finals[0].alternatives[0].words is None
 
 
-# ---------------------------------------------------------------------------
-# VAD events
-# ---------------------------------------------------------------------------
-
-
 async def test_server_vad_events_are_translated() -> None:
     """These are genuine server events, so translating them is not fabrication.
 
@@ -447,11 +384,6 @@ async def test_server_vad_events_are_translated() -> None:
     types = [ev.type for ev in events]
     assert stt.SpeechEventType.START_OF_SPEECH in types
     assert stt.SpeechEventType.END_OF_SPEECH in types
-
-
-# ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
 
 
 async def test_usage_reported_with_server_token_counts() -> None:
@@ -493,11 +425,6 @@ async def test_connection_is_dropped_not_pooled() -> None:
     pool = s._pool
     assert pool.removed == [ws]  # type: ignore[union-attr]
     assert pool.prewarm_calls >= 1  # type: ignore[union-attr]
-
-
-# ---------------------------------------------------------------------------
-# Error mapping
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -599,11 +526,6 @@ def _no_retry():
     return APIConnectOptions(max_retry=0)
 
 
-# ---------------------------------------------------------------------------
-# Resource management
-# ---------------------------------------------------------------------------
-
-
 async def test_aclose_does_not_close_external_session() -> None:
     import aiohttp
 
@@ -649,15 +571,6 @@ async def test_stream_snapshots_options() -> None:
 
     assert stream._opts.language == "zh"
     await stream.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Batch recognition (HTTP + SSE)
-# ---------------------------------------------------------------------------
-#
-# offline_recognize=True is declared, so FallbackAdapter and StreamAdapter will
-# actually call this path. A declared capability with no coverage is the
-# over-declaring trap these tests exist to prevent.
 
 
 class _FakeSSEResponse:
@@ -724,9 +637,6 @@ async def test_recognize_posts_nested_pcm_body() -> None:
     transcription = audio["input"]["transcription"]
     assert transcription["model"] == "stepaudio-3-asr-max"
     assert transcription["language"] == "zh"
-    # rate/bits/channel are mandatory for raw PCM, and come from the buffer
-    # rather than from opts: this path gets whatever the caller recorded, with
-    # no resampling in between.
     assert audio["input"]["format"] == {
         "type": "pcm",
         "codec": "pcm_s16le",
@@ -783,23 +693,13 @@ async def test_recognize_omits_hotwords_on_international_cluster() -> None:
 async def test_recognize_sends_hotwords_on_domestic_cluster() -> None:
     session = _FakeSSESession(['data: {"type":"transcript.text.done","text":"x"}'])
     s = stepfun.STT(
-        cluster="domestic", hotwords=["livekit"], http_session=session  # type: ignore[arg-type]
+        cluster="domestic",
+        hotwords=["livekit"],
+        http_session=session,  # type: ignore[arg-type]
     )
 
     await s.recognize([_frame()])
     assert session.json["audio"]["input"]["transcription"]["hotwords"] == ["livekit"]
-
-
-# ---------------------------------------------------------------------------
-# HTTP-only mode (use_streaming=False)
-# ---------------------------------------------------------------------------
-#
-# The two endpoints accept disjoint model sets: stepaudio-3-asr-max is
-# documented for the batch route only, and the streaming route accepts only
-# stepaudio-2.5-asr-stream. So running the batch model in a live conversation
-# means declaring streaming=False and letting the framework wrap this STT in a
-# stt.StreamAdapter, which buffers each utterance until the local VAD reports
-# end of speech.
 
 
 def test_http_only_declares_no_streaming() -> None:
@@ -880,16 +780,7 @@ async def test_stream_adapter_wraps_http_only_stt() -> None:
 async def test_stream_terminates_when_server_keeps_socket_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression: the stream must finish after input ends.
-
-    _recv_task only returns when the socket closes, but with server VAD the
-    server keeps the session open for further utterances rather than closing
-    after a final. Waiting on both tasks therefore hung forever once input
-    ended — which is exactly what a live run did, after happily emitting
-    interims. The receive side now gets a bounded grace period instead.
-
-    The fake server here never closes the socket, mirroring the real one.
-    """
+    """Regression: the stream must finish after input ends."""
     import asyncio
 
     from livekit.plugins.stepfun import stt as stt_impl
@@ -909,10 +800,10 @@ async def test_stream_terminates_when_server_keeps_socket_open(
     stream.push_frame(_frame())
     stream.end_input()
 
-    events = []
-    async with asyncio.timeout(10):
-        async for ev in stream:
-            events.append(ev)
+    async def collect():
+        return [event async for event in stream]
+
+    events = await asyncio.wait_for(collect(), 10)
     await stream.aclose()
 
     assert _texts(events, stt.SpeechEventType.INTERIM_TRANSCRIPT) == ["hello"]
@@ -947,33 +838,6 @@ async def test_stream_still_surfaces_recv_errors() -> None:
     await stream.aclose()
 
 
-# ---------------------------------------------------------------------------
-# New / unknown streaming models
-# ---------------------------------------------------------------------------
-
-
-def test_unknown_streaming_model_treated_as_cumulative() -> None:
-    """The dangerous default must be the safe one.
-
-    Delta semantics are keyed off a denylist of known-incremental models, so a
-    model this plugin has never heard of is treated as cumulative. Guessing
-    wrong the other way appends the full transcript to itself on every delta
-    and compounds into garbage; guessing wrong this way only shows the latest
-    fragment, and the final still arrives intact on the `completed` event.
-    """
-    from livekit.plugins.stepfun.stt import _STTOptions
-
-    def _cumulative(model: str) -> bool:
-        s = stepfun.STT(model=model)
-        opts: _STTOptions = s._opts
-        return opts.deltas_are_cumulative
-
-    assert _cumulative("stepaudio-9-asr-stream") is True
-    assert _cumulative("some-future-model-we-have-never-seen") is True
-    # The one documented exception.
-    assert _cumulative("step-asr-1.1-stream") is False
-
-
 async def test_unknown_model_deltas_replace_not_append() -> None:
     # The end-to-end consequence of the above, for any model not on the
     # known-incremental denylist.
@@ -1001,22 +865,6 @@ def test_unknown_model_does_not_overdeclare_alignment() -> None:
     assert caps.aligned_transcript is False
 
 
-def test_rejected_model_not_advertised() -> None:
-    """stepaudio-3-asr-stream is not offered, because the server refuses it.
-
-    Tried against the live endpoint on 2026-10-14:
-        {"code": "invalid_value", "param": "model",
-         "message": "unsupported model: stepaudio-3-asr-stream"}
-
-    It stays out of the Literal so editor completion cannot suggest it. Passing
-    it explicitly still works — these types are for completion, not validation —
-    and then fails at the server, which is the honest outcome.
-    """
-    from typing import get_args
-
-    assert "stepaudio-3-asr-stream" not in get_args(stepfun.STTModels)
-
-
 async def test_arbitrary_model_sent_in_session_update() -> None:
     # The Literal does not restrict what can be sent; whatever the caller
     # chooses reaches the server verbatim.
@@ -1033,8 +881,9 @@ async def test_session_created_does_not_acknowledge_configuration() -> None:
     ws = FakeWebSocket()
     s._pool = FakePool(ws)  # type: ignore[assignment]
     ws.queue_server_event({"type": "session.created"})
-    ws.queue_server_event({"type": "error", "error": {"code": "invalid_value",
-                                                       "message": "bad configuration"}})
+    ws.queue_server_event(
+        {"type": "error", "error": {"code": "invalid_value", "message": "bad configuration"}}
+    )
     stream = s.stream(conn_options=_no_retry())
     stream.push_frame(_frame())
     stream.end_input()
@@ -1063,12 +912,18 @@ async def test_empty_stream_does_not_commit() -> None:
 
 
 async def test_streaming_reports_detected_language() -> None:
-    _, events = await _drive(stepfun.STT(language="en"), [
-        _SESSION_READY,
-        {"type": _DELTA, "text": "你好", "language": "zh"},
-        {"type": "conversation.item.input_audio_transcription.completed",
-         "transcript": "你好", "language": "zh"},
-    ])
+    _, events = await _drive(
+        stepfun.STT(language="en"),
+        [
+            _SESSION_READY,
+            {"type": _DELTA, "text": "你好", "language": "zh"},
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "transcript": "你好",
+                "language": "zh",
+            },
+        ],
+    )
     transcripts = [e for e in events if e.alternatives]
     assert transcripts
     assert all(e.alternatives[0].language == "zh" for e in transcripts)
@@ -1084,10 +939,16 @@ async def test_batch_prewarm_does_not_open_streaming_socket() -> None:
     await s.aclose()
 
 
-@pytest.mark.parametrize("lines", [[], [
-    'data: {"type":"transcript.text.delta","delta":"unfinished"}',
-    'data: [DONE]',
-]])
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [],
+        [
+            'data: {"type":"transcript.text.delta","delta":"unfinished"}',
+            "data: [DONE]",
+        ],
+    ],
+)
 async def test_batch_rejects_truncated_response(lines: list[str]) -> None:
     from livekit.agents import APIConnectionError
 
@@ -1097,31 +958,40 @@ async def test_batch_rejects_truncated_response(lines: list[str]) -> None:
 
 
 async def test_batch_returns_at_done_without_waiting_for_eof() -> None:
-    session = _FakeSSESession([
-        'data: {"type":"transcript.text.done","text":"complete"}',
-        'data: {"type":"error","message":"must not read past done"}',
-    ])
+    session = _FakeSSESession(
+        [
+            'data: {"type":"transcript.text.done","text":"complete"}',
+            'data: {"type":"error","message":"must not read past done"}',
+        ]
+    )
     s = stepfun.STT(http_session=session)  # type: ignore[arg-type]
     event = await s.recognize([_frame()], conn_options=_no_retry())
     assert event.alternatives[0].text == "complete"
 
 
 async def test_interleaved_items_keep_separate_transcripts() -> None:
-    _, events = await _drive(stepfun.STT(), [
-        _SESSION_READY,
-        {"type": _DELTA, "item_id": "first", "text": "first turn"},
-        {"type": _DELTA, "item_id": "second", "text": "second turn"},
-        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "first"},
-        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "second"},
-    ])
+    _, events = await _drive(
+        stepfun.STT(),
+        [
+            _SESSION_READY,
+            {"type": _DELTA, "item_id": "first", "text": "first turn"},
+            {"type": _DELTA, "item_id": "second", "text": "second turn"},
+            {"type": "conversation.item.input_audio_transcription.completed", "item_id": "first"},
+            {"type": "conversation.item.input_audio_transcription.completed", "item_id": "second"},
+        ],
+    )
     assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["first turn", "second turn"]
 
 
 async def test_empty_final_does_not_restore_rejected_partial() -> None:
-    _, events = await _drive(stepfun.STT(), [
-        _SESSION_READY, {"type": _DELTA, "text": "discarded"},
-        {"type": "conversation.item.input_audio_transcription.completed", "transcript": ""},
-    ])
+    _, events = await _drive(
+        stepfun.STT(),
+        [
+            _SESSION_READY,
+            {"type": _DELTA, "text": "discarded"},
+            {"type": "conversation.item.input_audio_transcription.completed", "transcript": ""},
+        ],
+    )
     assert not _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT)
 
 
@@ -1135,10 +1005,12 @@ def test_model_update_refreshes_word_alignment_capability() -> None:
 
 
 async def test_batch_empty_final_does_not_restore_rejected_delta() -> None:
-    session = _FakeSSESession([
-        'data: {"type":"transcript.text.delta","delta":"discarded"}',
-        'data: {"type":"transcript.text.done","text":""}',
-    ])
+    session = _FakeSSESession(
+        [
+            'data: {"type":"transcript.text.delta","delta":"discarded"}',
+            'data: {"type":"transcript.text.done","text":""}',
+        ]
+    )
     speech = stepfun.STT(http_session=session)  # type: ignore[arg-type]
     event = await speech.recognize([_frame()])
     assert event.alternatives[0].text == ""

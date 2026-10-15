@@ -5,9 +5,9 @@ import json
 import weakref
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlencode
 
 import aiohttp
-
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
@@ -24,7 +24,6 @@ from .models import (
     DEFAULT_TTS_SAMPLE_RATE,
     DEFAULT_TTS_VOICE,
     INSTRUCTION_MAX_CHARS,
-    INSTRUCTION_TTS_MODELS,
     NUM_CHANNELS,
     SYSTEM_VOICES_MODEL,
     SYSTEM_VOICES_PATH,
@@ -56,25 +55,14 @@ _EV_SUBTITLE = "tts.response.subtitle"
 _EV_TEXT_FLUSHED = "tts.text.flushed"
 _EV_ERROR = "tts.response.error"
 
-#: Raw PCM16 on the streaming path. AudioEmitter passes it straight through as
-#: frames, which is the lowest-latency option; it also means the declared
-#: sample_rate is load-bearing, since raw PCM carries no header to correct it.
 _STREAM_MIME_TYPE = "audio/pcm"
 
-#: WAV on the one-shot path. This is deliberate: AudioEmitter reads the real
-#: sample rate and channel count out of the WAV header, so the one-shot path
-#: cannot be mis-tuned into playing at the wrong pitch even if the declared
-#: rate were wrong.
 _CHUNKED_RESPONSE_FORMAT = "wav"
 _CHUNKED_MIME_TYPE = "audio/wav"
 
 _HANDSHAKE_TIMEOUT = 10.0
 
 if TYPE_CHECKING:
-    # aiohttp 3.14 made ClientWebSocketResponse generic over whether receive()
-    # decodes, and ws_connect() returns the [bool] flavour while the bare name
-    # defaults to [Literal[True]]. Aliased so the subscript stays out of
-    # runtime expressions, which older aiohttp cannot evaluate.
     _WebSocket = aiohttp.ClientWebSocketResponse[bool]
 else:
     _WebSocket = aiohttp.ClientWebSocketResponse
@@ -112,59 +100,42 @@ class _TTSOptions:
         to them, and they do not interpret parentheses — which also means no
         escaping is needed there.
         """
-        return self.model in INSTRUCTION_TTS_MODELS
+        return self.model in INSTRUCTION_MAX_CHARS
+
+    def validate(self) -> None:
+        if self.sample_rate not in TTS_SAMPLE_RATES:
+            raise ValueError(
+                f"sample_rate must be one of {sorted(TTS_SAMPLE_RATES)}, got {self.sample_rate}"
+            )
+        if not 0.5 <= self.speed <= 2.0:
+            raise ValueError(f"speed must be between 0.5 and 2.0, got {self.speed}")
+        if not 0.1 <= self.volume <= 2.0:
+            raise ValueError(f"volume must be between 0.1 and 2.0, got {self.volume}")
+        if not is_given(self.instruction):
+            return
+        if not self.supports_instruction:
+            logger.warning("instruction is unsupported by %s; dropping it", self.model)
+            self.instruction = NOT_GIVEN
+        else:
+            cap = INSTRUCTION_MAX_CHARS[self.model]
+            if len(self.instruction) > cap:
+                raise ValueError(
+                    f"instruction for {self.model} is capped at {cap} characters, "
+                    f"got {len(self.instruction)}"
+                )
 
 
-# eq=False keeps object identity semantics, which this type needs for two
-# reasons. utils.ConnectionPool stores connections as dict keys and set members,
-# and a dataclass with the default eq=True sets __hash__ to None — making this
-# unhashable and the pool unusable. Identity is also the correct comparison
-# here: two connections are the same connection only if they are the same
-# object, never because they happen to share a session id.
-@dataclass(eq=False)
+@dataclass(eq=False)  # ConnectionPool requires identity hashing.
 class _Connection:
-    """A streaming TTS socket together with the session the server issued for it.
-
-    The pair travels together because the server, not the client, owns the
-    session id: it arrives in `tts.connection.done` right after the handshake
-    and every subsequent frame has to quote it. Capturing it at connect time is
-    also what makes prewarming worthwhile — a pooled connection has already
-    paid for DNS, TLS, the WebSocket upgrade *and* this round trip.
-    """
+    """A streaming TTS socket together with the session the server issued for it."""
 
     ws: _WebSocket
     session_id: str
+    model: str = ""
 
 
 class TTS(tts.TTS):
-    """StepFun speech synthesis.
-
-    Usage::
-
-        from livekit.plugins import stepfun
-
-        session = AgentSession(
-            tts=stepfun.TTS(voice="vibrant-youth", instruction="warm, professional"),
-            ...
-        )
-    """
-
-    # ------------------------------------------------------------------
-    # On the Markup mechanism
-    # ------------------------------------------------------------------
-    #
-    # tts.TTS.Markup is the framework's formal channel for telling the LLM which
-    # nonverbal markers it may emit (laughter, sighs, breaths), which is what
-    # actually surfaces this provider's expressiveness instead of leaving each
-    # caller to prompt-engineer it themselves.
-    #
-    # It cannot be enabled from here, though. Markup._provider_key() is only a
-    # key into the framework's own tables in livekit/agents/tts/_provider_format
-    # (supported_nonverbals / llm_instructions / convert_markup). Returning
-    # "stepfun" with no upstream entry yields empty tables — an override that
-    # declares nothing. Landing this therefore requires a change to
-    # livekit-agents itself, as part of the upstream plugin PR, not a change
-    # here.
+    """StepFun speech synthesis."""
 
     def __init__(
         self,
@@ -187,44 +158,30 @@ class TTS(tts.TTS):
         enable_inline_instruction: bool = False,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
-        """
+        """Create a streaming and HTTP speech synthesizer.
+
         Args:
-            voice: Voice ID. An ID the cluster does not know is rejected with
-                `400 voice_id_invalid`, so use `list_voices()` to discover them
-                rather than guessing. The international catalogue is a strict
-                subset of the domestic one.
-            instruction: Global natural-language direction for emotion and
-                persona. Only honoured by stepaudio-2.5-tts (200 chars) and
-                stepaudio-3-tts (500 chars); other models reject it. We control
-                this value, so it is safe to pass through verbatim.
-            language: Leaving it unset selects **English** server-side.
-            mode: "default" buffers and auto-segments the incoming text, which
-                is what you want when feeding it an LLM's token stream;
-                "sentence" splits on terminal punctuation instead. Either way
-                the server does its own sentence buffering, so this plugin does
-                not tokenize ahead of it.
-            timestamp: Request word-level subtitles. Enabling this also flips
-                `aligned_transcript` on.
-            enable_inline_instruction: Whether parenthesised inline directives
-                found in *downstream text* are allowed to take effect.
-
-                Defaults to False, deliberately. In a LiveKit pipeline the text
-                pushed to TTS is generated freely by the LLM and is not under
-                our control. On the models that parse them, text inside
-                parentheses is read as direction and is not spoken — so an
-                unlucky parenthetical silently drops words, and a user who can
-                influence the LLM's wording can reach the voice settings
-                indirectly. See `_escape_text` for what the safe default does.
+            model: TTS model ID.
+            voice: Voice ID; discover available IDs with list_voices().
+            instruction: Performance direction; capped at 200 characters for
+                stepaudio-2.5-tts and 500 for stepaudio-3-tts.
+            language: Synthesis language; the service defaults to English.
+            speed: Playback speed ratio, from 0.5 to 2.0.
+            volume: Volume ratio, from 0.1 to 2.0.
+            sample_rate: Output rate, defaulting to 24000 Hz.
+            mode: Streaming text segmentation, default or sentence.
+            text_normalization: HTTP normalization, standard or enhanced.
+            markdown_filter: Request Markdown filtering.
+            timestamp: Request streaming word-level subtitles.
+            api_key: API key, falling back to STEPFUN_API_KEY.
+            cluster: international or domestic; defaults to STEPFUN_CLUSTER,
+                then international. Credentials are cluster-specific.
+            base_url: Override the WebSocket base URL.
+            http_base_url: Override the HTTP base URL.
+            enable_inline_instruction: Preserve parenthesized performance directives
+                in input text. By default, delimiters are removed and contents spoken.
+            http_session: Caller-owned session; otherwise use the LiveKit job session.
         """
-        if sample_rate not in TTS_SAMPLE_RATES:
-            raise ValueError(
-                f"sample_rate must be one of {sorted(TTS_SAMPLE_RATES)}, got {sample_rate}"
-            )
-        if not 0.5 <= speed <= 2.0:
-            raise ValueError(f"speed must be between 0.5 and 2.0, got {speed}")
-        if not 0.1 <= volume <= 2.0:
-            raise ValueError(f"volume must be between 0.1 and 2.0, got {volume}")
-
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -233,30 +190,11 @@ class TTS(tts.TTS):
             # Must match what the server actually produces. A wrong value
             # raises no error; it just plays back at the wrong pitch.
             sample_rate=sample_rate,
-            # Not documented for the streaming endpoint, which exposes no
-            # channel parameter. Mono is near-certain for a single TTS voice,
-            # and the WAV header on the one-shot path confirms it at runtime.
             num_channels=NUM_CHANNELS,
         )
 
         resolved_cluster = _utils.resolve_cluster(cluster)
         _utils.warn_if_voice_unavailable(voice, resolved_cluster)
-
-        if is_given(instruction) and model not in INSTRUCTION_TTS_MODELS:
-            logger.warning(
-                "instruction is only supported by %s and is rejected by other "
-                "models; dropping it",
-                ", ".join(sorted(INSTRUCTION_TTS_MODELS)),
-                extra={"model": model},
-            )
-            instruction = NOT_GIVEN
-        elif is_given(instruction):
-            cap = INSTRUCTION_MAX_CHARS.get(str(model))
-            if cap is not None and len(instruction) > cap:
-                raise ValueError(
-                    f"instruction for {model} is capped at {cap} characters, "
-                    f"got {len(instruction)}"
-                )
 
         self._api_key = _utils.resolve_api_key(api_key)
         self._opts = _TTSOptions(
@@ -276,10 +214,10 @@ class TTS(tts.TTS):
             http_base_url=_utils.resolve_http_base_url(http_base_url, resolved_cluster),
             enable_inline_instruction=enable_inline_instruction,
         )
+        self._opts.validate()
 
         self._session = http_session
-        self._owns_session = http_session is None
-        self._streams = weakref.WeakSet[SynthesizeStream]()
+        self._streams = weakref.WeakSet[SynthesizeStream | ChunkedStream]()
         self._pool = utils.ConnectionPool[_Connection](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
@@ -301,10 +239,9 @@ class TTS(tts.TTS):
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
-            self._owns_session = False
         return self._session
 
-    async def _connect_ws(self, timeout: float) -> _Connection:
+    async def _connect_ws(self, timeout: float, *, model: str | None = None) -> _Connection:
         """Connect and complete the server's half of the handshake.
 
         Unlike the ASR endpoint, this one takes the model as a query parameter.
@@ -312,27 +249,24 @@ class TTS(tts.TTS):
         every later frame must quote, so the handshake is finished here rather
         than at first use — that way a prewarmed connection is genuinely ready.
         """
-        url = f"{self._opts.ws_base_url}{TTS_STREAM_PATH}?model={self._opts.model}"
+        model = self._opts.model if model is None else model
+        url = f"{self._opts.ws_base_url}{TTS_STREAM_PATH}?{urlencode({'model': model})}"
 
         try:
             ws = await asyncio.wait_for(
-                self._ensure_session().ws_connect(
-                    url, headers=_utils.auth_headers(self._api_key)
-                ),
+                self._ensure_session().ws_connect(url, headers=_utils.auth_headers(self._api_key)),
                 timeout,
             )
         except Exception as exc:
             raise _utils.translate_exception(exc, context="stepfun tts connect") from exc
 
         try:
-            session_id = await asyncio.wait_for(
-                _await_connection_done(ws), _HANDSHAKE_TIMEOUT
-            )
+            session_id = await asyncio.wait_for(_await_connection_done(ws), _HANDSHAKE_TIMEOUT)
         except BaseException:
             await ws.close()
             raise
 
-        return _Connection(ws=ws, session_id=session_id)
+        return _Connection(ws=ws, session_id=session_id, model=model)
 
     async def _close_ws(self, conn: _Connection) -> None:
         await conn.ws.close()
@@ -353,9 +287,7 @@ class TTS(tts.TTS):
 
         await self._pool.aclose()
 
-        # Only close a session we created ourselves.
-        if self._owns_session and self._session is not None:
-            await self._session.close()
+        # Both caller-supplied and job-scoped HTTP sessions have external owners.
         self._session = None
 
     # -- configuration -----------------------------------------------------
@@ -370,23 +302,25 @@ class TTS(tts.TTS):
         volume: NotGivenOr[float] = NOT_GIVEN,
         language: NotGivenOr[Language | str] = NOT_GIVEN,
     ) -> None:
+        """Apply validated options to future requests; active streams keep their snapshot."""
+        opts = replace(self._opts)
         if is_given(model):
-            self._opts.model = model
+            opts.model = model
         if is_given(voice):
             _utils.warn_if_voice_unavailable(voice, self._opts.cluster)
-            self._opts.voice = voice
+            opts.voice = voice
         if is_given(instruction):
-            self._opts.instruction = instruction
+            opts.instruction = instruction
         if is_given(speed):
-            self._opts.speed = speed
+            opts.speed = speed
         if is_given(volume):
-            self._opts.volume = volume
+            opts.volume = volume
         if is_given(language):
-            self._opts.language = language
+            opts.language = language
 
-        # A pooled socket is bound to the model it was opened with (query
-        # parameter), so reusing one after a model change would silently
-        # synthesize with the old one.
+        opts.validate()
+        self._opts = opts
+
         self._pool.invalidate()
 
     # -- voices ------------------------------------------------------------
@@ -424,7 +358,9 @@ class TTS(tts.TTS):
         and the provider notes that stepaudio-2.5-tts in particular sounds
         better here than over the WebSocket.
         """
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def stream(
         self,
@@ -451,6 +387,9 @@ async def _await_connection_done(ws: _WebSocket) -> str:
         ):
             raise APIConnectionError("stepfun tts: websocket closed during handshake")
 
+        if msg.type == aiohttp.WSMsgType.ERROR:
+            raise APIConnectionError(f"stepfun tts: websocket error: {msg.data}")
+
         if msg.type != aiohttp.WSMsgType.TEXT:
             continue
 
@@ -460,20 +399,13 @@ async def _await_connection_done(ws: _WebSocket) -> str:
         if etype == _EV_CONNECTION_DONE:
             session_id = (event.get("data") or {}).get("session_id")
             if not session_id:
-                raise APIConnectionError(
-                    "stepfun tts: connection.done carried no session_id"
-                )
+                raise APIConnectionError("stepfun tts: connection.done carried no session_id")
             return str(session_id)
 
         if etype == _EV_ERROR:
             raise _utils.translate_tts_ws_error(event, context="stepfun tts handshake")
 
         logger.debug("stepfun tts: ignoring event during handshake", extra={"type": etype})
-
-
-# ---------------------------------------------------------------------------
-# One-shot synthesis
-# ---------------------------------------------------------------------------
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -509,9 +441,7 @@ class ChunkedStream(tts.ChunkedStream):
                 url,
                 json=payload,
                 headers=_utils.auth_headers(self._tts._api_key),
-                timeout=aiohttp.ClientTimeout(
-                    total=30.0, sock_connect=self._conn_options.timeout
-                ),
+                timeout=aiohttp.ClientTimeout(total=30.0, sock_connect=self._conn_options.timeout),
             ) as resp:
                 await _utils.raise_for_status(resp)
 
@@ -531,31 +461,21 @@ class ChunkedStream(tts.ChunkedStream):
             raise _utils.translate_exception(exc, context="stepfun tts synthesize") from exc
 
 
-# ---------------------------------------------------------------------------
-# Streaming synthesis
-# ---------------------------------------------------------------------------
-
-
 class SynthesizeStream(tts.SynthesizeStream):
-    """One segment per instance, over one WebSocket session.
-
-    Both sides of the contract want it that way. The framework deprecated
-    handling several segments in one SynthesizeStream — push() warns and drops
-    input past the first segment, directing plugins to pooled connections
-    instead. And the provider's session ends at `tts.text.done`, after which it
-    releases the socket. So a segment maps exactly onto a session, and segment
-    boundaries inside a stream are expressed with `tts.text.flush`, which drains
-    buffered audio without ending anything.
-    """
+    """One segment per instance, over one WebSocket session."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
-        self._generation_done = False
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        self._generation_done = False
+        try:
+            await self._run_impl(output_emitter)
+        except Exception as exc:
+            raise _utils.translate_exception(exc, context="stepfun tts stream") from exc
+
+    async def _run_impl(self, output_emitter: tts.AudioEmitter) -> None:
 
         output_emitter.initialize(
             request_id=utils.shortuuid(),
@@ -565,24 +485,25 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        async with self._tts._pool.connection(
-            timeout=self._conn_options.timeout
-        ) as conn:
+        async with self._tts._pool.connection(timeout=self._conn_options.timeout) as conn:
             self._acquire_time = self._tts._pool.last_acquire_time
             self._connection_reused = self._tts._pool.last_connection_reused
 
             try:
+                # A model update may happen after this stream snapshots its options.
+                if conn.model and conn.model != self._opts.model:
+                    self._tts._pool.remove(conn)
+                    await conn.ws.close()
+                    conn = await self._tts._connect_ws(
+                        self._conn_options.timeout, model=self._opts.model
+                    )
+                    self._connection_reused = False
                 await self._create_session(conn)
 
-                # Using the server's session id as the segment id also records
-                # it on the trace as a provider request id, so a trace can be
-                # lined up against the provider's own logs when debugging.
                 output_emitter.start_segment(segment_id=conn.session_id)
 
                 tasks = [
-                    asyncio.create_task(
-                        self._send_task(conn), name="stepfun_tts_send"
-                    ),
+                    asyncio.create_task(self._send_task(conn), name="stepfun_tts_send"),
                     asyncio.create_task(
                         self._recv_task(conn, output_emitter), name="stepfun_tts_recv"
                     ),
@@ -592,10 +513,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     await utils.aio.cancel_and_wait(*tasks)
             finally:
-                # The server releases the socket once generation ends, and an
-                # interrupted one is left in an unknown state, so it must never
-                # go back into the pool. Re-arm so the next turn still starts
-                # from a completed handshake.
+                # remove() alone defers close until another acquisition.
+                await conn.ws.close()
                 self._tts._pool.remove(conn)
                 self._tts._pool.prewarm()
 
@@ -629,7 +548,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             await asyncio.wait_for(self._await_created(conn), _HANDSHAKE_TIMEOUT)
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise APIConnectionError(
                 "stepfun tts: timed out waiting for tts.response.created"
             ) from exc
@@ -647,6 +566,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "stepfun tts: websocket closed before tts.response.created"
                 )
 
+            if msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"stepfun tts: websocket error: {msg.data}")
+
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
 
@@ -663,20 +585,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     # -- upstream: text ----------------------------------------------------
 
     async def _send_task(self, conn: _Connection) -> None:
-        """Consume self._input_ch, typed as str | _FlushSentinel.
-
-        The sentinel must genuinely reach the wire. Plugins have shipped with a
-        bare `continue` here, so the segment-end signal only went out once the
-        input channel drained — making stream.flush() a wire-level no-op,
-        leaving the provider's per-stream timeout running and ending in a string
-        of 408s (livekit/agents issue #6425). It happens to work under
-        AgentSession because AgentActivity splits segments above the plugin, but
-        callers using tts.stream() + flush() directly get burned.
-
-        Here the sentinel maps to `tts.text.flush` and *not* `tts.text.done`:
-        done ends the whole session and makes the server release the socket,
-        which would strand any text still arriving behind it.
-        """
+        """Consume self._input_ch, typed as str | _FlushSentinel."""
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 await self._send(conn, _EV_TEXT_FLUSH)
@@ -687,9 +596,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 continue
 
             for chunk in _split_for_wire(text):
-                # The TTFB anchor: _started_time stays 0 until this is called,
-                # and _emit_metrics() bails out while it is 0 — so without this
-                # the plugin reports no TTS metrics at all.
                 self._mark_started()
                 await self._send(conn, _EV_TEXT_DELTA, text=chunk)
 
@@ -709,9 +615,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     # -- downstream: audio -------------------------------------------------
 
-    async def _recv_task(
-        self, conn: _Connection, output_emitter: tts.AudioEmitter
-    ) -> None:
+    async def _recv_task(self, conn: _Connection, output_emitter: tts.AudioEmitter) -> None:
         while True:
             msg = await conn.ws.receive()
 
@@ -720,9 +624,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                if self._generation_done:
-                    return
                 raise APIConnectionError("stepfun tts: websocket closed unexpectedly")
+
+            if msg.type == aiohttp.WSMsgType.ERROR:
+                raise APIConnectionError(f"stepfun tts: websocket error: {msg.data}")
 
             if msg.type != aiohttp.WSMsgType.TEXT:
                 # Audio arrives as base64 inside JSON text frames; the protocol
@@ -754,10 +659,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             return False
 
         if etype == _EV_AUDIO_DONE:
-            # The payload also carries the whole session's audio, which we
-            # ignore: every byte of it already arrived as deltas, and pushing it
-            # again would duplicate the utterance.
-            self._generation_done = True
             output_emitter.end_segment()
             return True
 
@@ -766,14 +667,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             return False
 
         if etype in (_EV_SENTENCE_START, _EV_SENTENCE_END):
-            # Per-sentence boundaries inside our one segment. The framework has
-            # no equivalent, and they must not be mapped onto segment
-            # boundaries: end_segment() followed by a push raises
-            # "start_segment() must be called before pushing audio data"
-            # (livekit/agents issue #6929).
-            logger.debug(
-                "stepfun tts: %s", etype, extra={"request_id": data.get("request_id")}
-            )
+            logger.debug("stepfun tts: %s", etype, extra={"request_id": data.get("request_id")})
             return False
 
         if etype in (_EV_TEXT_FLUSHED, _EV_RESPONSE_CREATED, _EV_CONNECTION_DONE):
@@ -783,9 +677,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         logger.debug("stepfun tts: unhandled event type %s", etype)
         return False
 
-    def _push_subtitles(
-        self, data: dict[str, Any], output_emitter: tts.AudioEmitter
-    ) -> None:
+    def _push_subtitles(self, data: dict[str, Any], output_emitter: tts.AudioEmitter) -> None:
         """Translate a subtitle event into timed transcript strings.
 
         Times are milliseconds and already cumulative across earlier sentences,
@@ -807,28 +699,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.push_timed_transcript(timed)
 
 
-# ---------------------------------------------------------------------------
-# Text handling
-# ---------------------------------------------------------------------------
-
-
 def _escape_text(text: str, opts: _TTSOptions) -> str:
-    """Neutralize anything downstream text could trip in the directive parser.
-
-    On stepaudio-2.5-tts and stepaudio-3-tts, text inside parentheses is read as
-    performance direction and is not spoken. That is a useful authoring feature
-    when a human writes the script, and a liability in a LiveKit pipeline, where
-    the text is whatever the LLM produced: a stray "(as you mentioned)" would be
-    silently swallowed, and a user who can steer the LLM's wording could reach
-    the voice settings through it.
-
-    The provider documents no escape sequence, so the only fail-safe action
-    available is to remove the delimiters and keep their contents as ordinary
-    words — the server then speaks the text instead of interpreting it. That is
-    lossy for text that *was* meant as direction, which is why
-    `enable_inline_instruction=True` turns it off, and why it is skipped
-    entirely on the models that do not parse parentheses at all.
-    """
+    """Neutralize anything downstream text could trip in the directive parser."""
     if opts.enable_inline_instruction or not opts.supports_instruction:
         return text
     return text.translate(_INLINE_DIRECTIVE_CHARS)
@@ -842,7 +714,4 @@ def _split_for_wire(text: str) -> list[str]:
     """
     if len(text) <= TTS_MAX_INPUT_CHARS:
         return [text]
-    return [
-        text[i : i + TTS_MAX_INPUT_CHARS]
-        for i in range(0, len(text), TTS_MAX_INPUT_CHARS)
-    ]
+    return [text[i : i + TTS_MAX_INPUT_CHARS] for i in range(0, len(text), TTS_MAX_INPUT_CHARS)]

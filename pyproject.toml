@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-stepfun"
 dynamic = ["version"]
-description = "StepFun (阶跃星辰) ASR and TTS plugin for LiveKit Agents"
+description = "StepFun (阶跃星辰) speech and chat plugin for LiveKit Agents"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
@@ -24,30 +24,18 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-# Verified against livekit-agents 1.8.6 (current stable) and 2.0.0b1 (beta):
-# same 92 tests, ruff and strict mypy pass on both, with no version branching in
-# the plugin. Every framework API used here is present and identical in both
-# lines, so the floor is the older one.
-#
-# Deliberately not upper-bounded, and deliberately not pinned to 2.x: pip does
-# not resolve to prereleases by default, so a plain install gets stable 1.8.6
-# while anyone who has opted into the 2.x beta is equally supported.
 dependencies = [
-    "livekit-agents[codecs,turn-detector]>=1.8.6",
+    "livekit-agents[codecs]>=1.8.6",
+    "aiohttp>=3.10",
 ]
 
 [project.optional-dependencies]
-# StepFun's chat endpoint is OpenAI-compatible, so stepfun.LLM is a thin
-# subclass of the OpenAI plugin's client rather than its own implementation.
-# Kept optional: the STT and TTS components do not need it, and most callers
-# pair StepFun speech with someone else's LLM.
+# The OpenAI-compatible chat client is optional for speech-only installs.
 llm = [
     "livekit-plugins-openai>=1.8.6",
 ]
-# What examples/ needs beyond the plugin itself. Not a runtime dependency: the
-# library reads os.environ and never loads a .env file, since doing that from
-# inside a dependency would be surprising.
 examples = [
+    "livekit-agents[turn-detector]>=1.8.6",
     "python-dotenv>=1.0",
     "livekit-plugins-openai>=1.8.6",
     "livekit-plugins-silero>=1.8.6",
@@ -88,19 +76,14 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 python_version = "3.10"
 strict = true
 warn_unused_ignores = true
-# stt.STT / tts.TTS are generic over the extra events a plugin emits. This
-# plugin emits none beyond the base class's own, and every upstream plugin
-# subclasses them bare, so requiring an explicit parameter here would only
-# force a meaningless `Any` and make this code diverge from its siblings.
+# Match upstream plugin base-class annotations.
 disallow_any_generics = false
 
-# The OpenAI plugin is an optional extra (see the `llm` extra above), so it is
-# absent in a minimal checkout and in the ASR/TTS-only CI job. stepfun.LLM
-# subclasses its client; without the stubs mypy cannot see the base class, and
-# the subclass carries an explicit ignore for that.
+# Allow type checking a speech-only install.
 [[tool.mypy.overrides]]
 module = ["livekit.plugins.openai", "livekit.plugins.openai.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]

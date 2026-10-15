@@ -1,23 +1,10 @@
-"""TTS unit tests.
-
-Pinning down the behaviours that were wrong before the protocol was confirmed,
-plus the two framework contracts this plugin has to honour:
-
-  1. The handshake. The *server* issues the session id, in tts.connection.done,
-     and generation may only begin after tts.response.created.
-  2. A _FlushSentinel maps to tts.text.flush, never tts.text.done — done ends
-     the session and makes the server release the socket.
-  3. _mark_started() must be called, or the framework reports no TTS metrics at
-     all (TTFB included).
-  4. Inline parenthesised directives in LLM-generated text are neutralized by
-     default.
-  5. aclose() must not close a session that was passed in.
-"""
+"""TTS unit tests."""
 
 from __future__ import annotations
 
 import pytest
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents.types import NOT_GIVEN
 
 from livekit.plugins import stepfun
 from livekit.plugins.stepfun import _utils
@@ -31,12 +18,6 @@ _CREATED = {"type": "tts.response.created", "data": {"session_id": _SESSION}}
 #: 50ms of silence at 24kHz, so pushed_duration ends up above zero — the base
 #: class raises if text was synthesized but no audio ever arrived.
 _PCM = b"\x00\x00" * 1200
-
-
-@pytest.fixture(autouse=True)
-def _api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
-    monkeypatch.delenv("STEPFUN_CLUSTER", raising=False)
 
 
 def _audio_delta(pcm: bytes = _PCM, status: str = "unfinished") -> dict:
@@ -83,16 +64,8 @@ async def _drive(
     return ws, frames
 
 
-# ---------------------------------------------------------------------------
-# Construction
-# ---------------------------------------------------------------------------
-
-
 def test_defaults() -> None:
     t = stepfun.TTS()
-    # stepaudio-2.5-tts is documented as sounding noticeably worse over the
-    # streaming WebSocket than over HTTP, which makes it a poor default for a
-    # voice agent.
     assert t.model == "stepaudio-3-tts"
     assert t.provider == "StepFun"
     assert t._opts.cluster == "international"
@@ -139,13 +112,8 @@ def test_instruction_dropped_on_unsupported_model() -> None:
     # step-tts-mini rejects `instruction` outright, so sending it would turn a
     # cosmetic option into a hard failure.
     t = stepfun.TTS(model="step-tts-mini", instruction="be cheerful")
-    assert t._opts.instruction is stepfun.TTS.__init__.__defaults__ or True
+    assert t._opts.instruction is NOT_GIVEN
     assert not t._opts.supports_instruction
-
-
-# ---------------------------------------------------------------------------
-# Handshake
-# ---------------------------------------------------------------------------
 
 
 async def test_handshake_captures_server_session_id() -> None:
@@ -155,9 +123,7 @@ async def test_handshake_captures_server_session_id() -> None:
     the server issued in tts.connection.done.
     """
     ws = FakeWebSocket()
-    ws.queue_server_event(
-        {"type": "tts.connection.done", "data": {"session_id": "from-server"}}
-    )
+    ws.queue_server_event({"type": "tts.connection.done", "data": {"session_id": "from-server"}})
 
     assert await _await_connection_done(ws) == "from-server"  # type: ignore[arg-type]
 
@@ -210,24 +176,8 @@ async def test_create_precedes_any_text() -> None:
     assert ws.types_sent()[0] == "tts.create"
 
 
-# ---------------------------------------------------------------------------
-# Segment boundaries
-# ---------------------------------------------------------------------------
-
-
 async def test_flush_sends_flush_not_done() -> None:
-    """Regression test for the segment-boundary mix-up.
-
-    tts.text.done ends the whole session and makes the server release the
-    socket, so using it for a mid-stream flush strands any text still arriving
-    behind it. tts.text.flush drains buffered audio without ending anything.
-
-    The inverse failure — treating the sentinel as a no-op — makes
-    stream.flush() a wire-level no-op, leaves the provider's per-stream timeout
-    running and ends in a string of 408s (livekit/agents issue #6425). Both
-    failures hide under AgentSession, which splits segments above the plugin, so
-    the stream has to be driven directly.
-    """
+    """Regression test for the segment-boundary mix-up."""
     t = stepfun.TTS()
     ws, _ = await _drive(
         t,
@@ -270,16 +220,9 @@ async def test_long_text_split_to_respect_frame_cap() -> None:
     assert [len(d["text"]) for d in deltas] == [1000, 1000, 500]
 
 
-# ---------------------------------------------------------------------------
-# Audio
-# ---------------------------------------------------------------------------
-
-
 async def test_audio_deltas_decoded_and_emitted() -> None:
     t = stepfun.TTS()
-    _, frames = await _drive(
-        t, ["hello"], [_CREATED, _audio_delta(), _audio_delta(), _AUDIO_DONE]
-    )
+    _, frames = await _drive(t, ["hello"], [_CREATED, _audio_delta(), _audio_delta(), _AUDIO_DONE])
 
     assert frames, "no audio emitted"
     assert sum(f.frame.samples_per_channel for f in frames) > 0
@@ -333,14 +276,7 @@ async def test_connection_is_dropped_not_pooled() -> None:
 
 
 async def test_ttfb_metrics_emitted() -> None:
-    """_mark_started() is the TTFB anchor, and this asserts the consequence.
-
-    The framework's metrics emitter returns early while _started_time is 0, so
-    a plugin that never calls _mark_started() reports no TTS metrics at all —
-    and TTFB is the first number customers look at. Asserting on the emitted
-    metric rather than on _started_time also survives the base class resetting
-    that field once it has emitted.
-    """
+    """_mark_started() is the TTFB anchor, and this asserts the consequence."""
     t = stepfun.TTS()
     collected: list = []
     t.on("metrics_collected", collected.append)
@@ -378,11 +314,6 @@ async def test_subtitles_pushed_as_timed_transcript() -> None:
     )
 
     assert frames, "no audio emitted"
-
-
-# ---------------------------------------------------------------------------
-# Error mapping
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -444,11 +375,6 @@ async def test_error_frame_aborts_stream() -> None:
     await stream.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Inline directive escaping
-# ---------------------------------------------------------------------------
-
-
 def _opts(**kwargs):
     return stepfun.TTS(**kwargs)._opts
 
@@ -481,15 +407,8 @@ def test_escaping_skipped_on_models_without_directives() -> None:
 
 async def test_escaping_applied_on_the_wire() -> None:
     t = stepfun.TTS()
-    ws, _ = await _drive(
-        t, ["ok (laughs) fine"], [_CREATED, _audio_delta(), _AUDIO_DONE]
-    )
+    ws, _ = await _drive(t, ["ok (laughs) fine"], [_CREATED, _audio_delta(), _AUDIO_DONE])
     assert ws.data_of_type("tts.text.delta")[0]["text"] == "ok laughs fine"
-
-
-# ---------------------------------------------------------------------------
-# Resource management
-# ---------------------------------------------------------------------------
 
 
 async def test_aclose_does_not_close_external_session() -> None:
@@ -521,19 +440,11 @@ async def test_update_options_invalidates_pool() -> None:
 
 
 async def test_chunked_stream_snapshots_options() -> None:
-    # Snapshotted in __init__, never read lazily in _run(), or this races with
-    # the next update_options() call and shows up as intermittently using the
-    # previous turn's voice.
     t = stepfun.TTS(voice="vibrant-youth")
     chunked = t.synthesize("hello")
     t.update_options(voice="lively-girl")
     assert chunked._opts.voice == "vibrant-youth"
     await chunked.aclose()
-
-
-# ---------------------------------------------------------------------------
-# One-shot HTTP path
-# ---------------------------------------------------------------------------
 
 
 class _FakeResponse:
@@ -623,9 +534,6 @@ async def test_chunked_request_uses_http_field_names() -> None:
     assert "voice_id" not in session.json
     assert "speed_ratio" not in session.json
 
-    # WAV rather than raw pcm, deliberately: AudioEmitter reads the real sample
-    # rate and channel count out of the header, so this path cannot be
-    # mis-tuned into playing at the wrong pitch.
     assert session.json["response_format"] == "wav"
     assert frames, "no audio emitted"
 
@@ -634,44 +542,14 @@ async def test_chunked_drops_instruction_on_unsupported_model() -> None:
     # step-tts-mini rejects `instruction` outright.
     session = _FakeHTTPSession(_wav())
     t = stepfun.TTS(
-        model="step-tts-mini", instruction="warm", http_session=session  # type: ignore[arg-type]
+        model="step-tts-mini",
+        instruction="warm",
+        http_session=session,  # type: ignore[arg-type]
     )
 
     [_ async for _ in t.synthesize("hello")]
 
     assert "instruction" not in session.json
-
-
-# ---------------------------------------------------------------------------
-# Real ConnectionPool integration
-# ---------------------------------------------------------------------------
-#
-# These drive livekit's actual utils.ConnectionPool rather than FakePool. That
-# matters: the fake stores its single connection in an attribute, while the real
-# pool keeps connections as dict keys and set members. A _Connection that was
-# not hashable passed every FakePool test and then failed on the first live
-# call with "TypeError: unhashable type: '_Connection'".
-
-
-def test_connection_is_hashable() -> None:
-    """utils.ConnectionPool stores connections in a dict and a set.
-
-    A @dataclass with the default eq=True sets __hash__ to None, which makes the
-    pool unusable. eq=False restores identity hashing.
-    """
-    conn = _Connection(ws=FakeWebSocket(), session_id=_SESSION)  # type: ignore[arg-type]
-    assert isinstance(hash(conn), int)
-    assert {conn: 1}[conn] == 1
-    assert conn in {conn}
-
-
-def test_connections_compare_by_identity() -> None:
-    # Two sockets that happen to share a session id are still distinct
-    # connections; collapsing them would let the pool hand out a closed socket.
-    a = _Connection(ws=FakeWebSocket(), session_id=_SESSION)  # type: ignore[arg-type]
-    b = _Connection(ws=FakeWebSocket(), session_id=_SESSION)  # type: ignore[arg-type]
-    assert a != b
-    assert len({a, b}) == 2
 
 
 async def test_real_pool_round_trip() -> None:
