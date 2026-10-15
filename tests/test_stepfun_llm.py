@@ -105,6 +105,23 @@ def test_llm_models_exported() -> None:
 # ---------------------------------------------------------------------------
 
 
+@requires_openai
+def test_llm_is_bound_at_import_not_on_first_access() -> None:
+    """LLM must already be a module attribute once the package is imported.
+
+    Regression test for a real failure. `livekit.plugins.openai` calls
+    Plugin.register_plugin() at import time, and the framework requires that to
+    run on the main thread. When LLM was resolved lazily through module
+    __getattr__, the import happened on first *use* — which in an agent is
+    inside a job task, not the main thread — and crashed the job with
+    "Plugins must be registered on the main thread".
+
+    vars() rather than getattr(), because getattr() would trigger the very
+    deferred import this is asserting against.
+    """
+    assert "LLM" in vars(stepfun)
+
+
 def test_base_package_imports_without_llm_extra() -> None:
     """ASR and TTS must not depend on the OpenAI plugin.
 

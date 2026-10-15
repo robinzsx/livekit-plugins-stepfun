@@ -33,7 +33,7 @@ classifiers = [
 # not resolve to prereleases by default, so a plain install gets stable 1.8.6
 # while anyone who has opted into the 2.x beta is equally supported.
 dependencies = [
-    "livekit-agents[codecs]>=1.8.6",
+    "livekit-agents[codecs,turn-detector]>=1.8.6",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +43,18 @@ dependencies = [
 # pair StepFun speech with someone else's LLM.
 llm = [
     "livekit-plugins-openai>=1.8.6",
+]
+# What examples/ needs beyond the plugin itself. Not a runtime dependency: the
+# library reads os.environ and never loads a .env file, since doing that from
+# inside a dependency would be surprising.
+examples = [
+    "python-dotenv>=1.0",
+    "livekit-plugins-openai>=1.8.6",
+    "livekit-plugins-silero>=1.8.6",
+]
+# Offline CPU denoising for the example's shared audio input.
+noise-cancellation = [
+    "pyrnnoise>=0.4.3,<0.5",
 ]
 dev = [
     "pytest>=8.0",

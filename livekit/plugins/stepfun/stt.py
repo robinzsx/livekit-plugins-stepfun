@@ -87,8 +87,7 @@ class _STTOptions:
     sample_rate: int
     #: Context or terminology hints for the streaming endpoint's `prompt` field.
     prompt: NotGivenOr[str]
-    #: Hotword list for the batch endpoint. Documented on the domestic cluster
-    #: only, so it is omitted internationally rather than risking a 400.
+    #: Hotword list for the batch endpoint.
     hotwords: list[str]
     enable_itn: bool
     enable_timestamp_align: bool
@@ -167,8 +166,7 @@ class STT(stt.STT):
                 server-side — it is not inferred from the cluster, so Chinese
                 callers must pass language="zh" explicitly.
             prompt: Context or terminology hints for streaming recognition.
-            hotwords: Hotword list for batch recognition. Documented on the
-                domestic cluster only and omitted internationally.
+            hotwords: Hotword list for batch recognition (domestic cluster only).
             enable_timestamp_align: Request per-word timestamps. Enabling this
                 also flips `aligned_transcript` to "word", which is what turns
                 on LiveKit's adaptive interruption. Streaming only.
@@ -315,7 +313,8 @@ class STT(stt.STT):
         start cost does not land on the first turn.
         """
         self._ensure_session()
-        self._pool.prewarm()
+        if self._use_streaming:
+            self._pool.prewarm()
 
     async def aclose(self) -> None:
         for stream in list(self._streams):
@@ -350,6 +349,9 @@ class STT(stt.STT):
         """
         if is_given(model):
             self._opts.model = model
+            self._capabilities.aligned_transcript = (
+                "word" if self._use_streaming and self._opts.timestamps_available else False
+            )
         if is_given(language):
             self._opts.language = language
         if is_given(prompt):
@@ -414,8 +416,6 @@ class STT(stt.STT):
         if is_given(opts.language):
             transcription["language"] = opts.language
         if opts.hotwords and opts.cluster == "domestic":
-            # Documented for the domestic cluster only; sending it
-            # internationally risks a 400 on an unknown parameter.
             transcription["hotwords"] = opts.hotwords
 
         payload = {
@@ -448,6 +448,7 @@ class STT(stt.STT):
         text = ""
         usage: dict[str, Any] = {}
         session_id = ""
+        completed = False
 
         try:
             async with self._ensure_session().post(
@@ -455,7 +456,9 @@ class STT(stt.STT):
                 json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(
-                    total=None, sock_connect=conn_options.timeout
+                    total=None,
+                    sock_connect=conn_options.timeout,
+                    sock_read=conn_options.timeout,
                 ),
             ) as resp:
                 await _utils.raise_for_status(resp)
@@ -467,9 +470,11 @@ class STT(stt.STT):
                         # cumulative deltas.
                         text += event.get("delta") or ""
                     elif etype == "transcript.text.done":
-                        text = event.get("text") or text
+                        completed = True
+                        text = event.get("text", text) or ""
                         usage = event.get("usage") or {}
                         session_id = (event.get("meta") or {}).get("session_id", "")
+                        break
                     elif etype == "error":
                         raise _utils.status_error(
                             status_code=-1,
@@ -479,6 +484,9 @@ class STT(stt.STT):
                         )
         except Exception as exc:
             raise _utils.translate_exception(exc, context="stepfun stt recognize") from exc
+
+        if not completed:
+            raise APIConnectionError("stepfun stt: SSE stream ended before transcript.text.done")
 
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -537,7 +545,7 @@ class RecognizeStream(stt.RecognizeStream):
         self._stt_impl = stt
         self._opts = opts  # already replace()d in STT.stream(); this is a snapshot
         self._request_id = ""
-        self._interim_text = ""
+        self._interim_texts: dict[str, str] = {}
         self._input_done = False
 
         # RECOGNITION_USAGE is the *only* trigger for STTMetrics in streaming
@@ -557,7 +565,7 @@ class RecognizeStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         self._request_id = utils.shortuuid()
-        self._interim_text = ""
+        self._interim_texts.clear()
         self._input_done = False
 
         async with self._stt_impl._pool.connection(
@@ -568,7 +576,11 @@ class RecognizeStream(stt.RecognizeStream):
                 self._stt_impl._pool.last_connection_reused,
             )
 
-            await self._configure_session(ws)
+            try:
+                await self._configure_session(ws)
+            except BaseException:
+                self._stt_impl._pool.remove(ws)
+                raise
 
             tasks = [
                 asyncio.create_task(self._send_task(ws), name="stepfun_stt_send"),
@@ -686,7 +698,7 @@ class RecognizeStream(stt.RecognizeStream):
 
             event = json.loads(msg.data)
             etype = event.get("type")
-            if etype in (_EV_SESSION_CREATED, _EV_SESSION_UPDATED):
+            if etype == _EV_SESSION_UPDATED:
                 logger.debug(
                     "stepfun stt: session ready",
                     extra={
@@ -706,6 +718,7 @@ class RecognizeStream(stt.RecognizeStream):
     # -- upstream ----------------------------------------------------------
 
     async def _send_task(self, ws: _WebSocket) -> None:
+        self._uncommitted_audio = False
         samples_per_frame = self._opts.sample_rate * STT_FRAME_MS // 1000
         bstream = utils.audio.AudioByteStream(
             self._opts.sample_rate,
@@ -726,6 +739,7 @@ class RecognizeStream(stt.RecognizeStream):
                 flushing = True
 
             for frame in frames:
+                self._uncommitted_audio = True
                 self._audio_duration += frame.samples_per_channel / frame.sample_rate
                 await ws.send_str(
                     json.dumps(
@@ -772,7 +786,7 @@ class RecognizeStream(stt.RecognizeStream):
         sees a final. That is a property of silence detection, not a server
         defect — a real microphone keeps streaming.
         """
-        if self._opts.server_vad:
+        if self._opts.server_vad or not self._uncommitted_audio:
             return
 
         await ws.send_str(
@@ -780,6 +794,7 @@ class RecognizeStream(stt.RecognizeStream):
                 {"event_id": _utils.event_id(), "type": "input_audio_buffer.commit"}
             )
         )
+        self._uncommitted_audio = False
 
     # -- downstream --------------------------------------------------------
 
@@ -862,15 +877,17 @@ class RecognizeStream(stt.RecognizeStream):
 
     def _handle_delta(self, event: dict[str, Any]) -> None:
         text = event.get("text") or ""
+        item_id = event.get("item_id") or ""
 
         if self._opts.deltas_are_cumulative:
             # Replaces, never appends — the payload is the full transcript so
             # far, including revisions to text already emitted.
-            self._interim_text = text
+            self._interim_texts[item_id] = text
         else:
-            self._interim_text += text
+            self._interim_texts[item_id] = self._interim_texts.get(item_id, "") + text
 
-        if not self._interim_text:
+        interim_text = self._interim_texts[item_id]
+        if not interim_text:
             return
 
         # `stash` holds the trailing characters the server may still rewrite, so
@@ -878,8 +895,8 @@ class RecognizeStream(stt.RecognizeStream):
         # PREFLIGHT_TRANSCRIPT is for: stable enough for preemptive generation
         # while the rest of the utterance is still in flux.
         stash = event.get("stash") or ""
-        if stash and self._interim_text.endswith(stash):
-            stable = self._interim_text[: -len(stash)]
+        if stash and interim_text.endswith(stash):
+            stable = interim_text[: -len(stash)]
             if stable:
                 self._emit(
                     stt.SpeechEventType.PREFLIGHT_TRANSCRIPT, stable, event, words=None
@@ -887,7 +904,7 @@ class RecognizeStream(stt.RecognizeStream):
 
         self._emit(
             stt.SpeechEventType.INTERIM_TRANSCRIPT,
-            self._interim_text,
+            interim_text,
             event,
             words=self._timed_words(event),
         )
@@ -895,8 +912,8 @@ class RecognizeStream(stt.RecognizeStream):
     def _handle_completed(self, event: dict[str, Any]) -> None:
         # The completed frame carries the final text under `transcript`, not
         # `text`.
-        text = event.get("transcript") or self._interim_text
-        self._interim_text = ""
+        interim_text = self._interim_texts.pop(event.get("item_id") or "", "")
+        text = event.get("transcript", interim_text) or ""
 
         usage = event.get("usage") or {}
         self._pending_tokens = (
@@ -957,12 +974,13 @@ class RecognizeStream(stt.RecognizeStream):
                 request_id=self._request_id,
                 alternatives=[
                     stt.SpeechData(
-                        # The endpoint echoes no detected language, so report
-                        # the configured one; English is the server default.
                         language=LanguageCode(
-                            self._opts.language
-                            if is_given(self._opts.language)
-                            else "en"
+                            raw.get("language")
+                            or (
+                                self._opts.language
+                                if is_given(self._opts.language)
+                                else "en"
+                            )
                         ),
                         text=text,
                         words=words,

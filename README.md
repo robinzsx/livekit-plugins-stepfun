@@ -4,13 +4,14 @@ Agent Framework plugin for [StepFun](https://www.stepfun.com/) (阶跃星辰) sp
 services. Supports streaming speech-to-text and low-latency streaming
 text-to-speech.
 
-Developed and verified against `livekit-agents` **1.8.6** (current stable) and
-**2.0.0b1** (beta) — the same 92 tests, `ruff` and strict `mypy` pass on both,
-with no version branching in the plugin.
+The current regression suite, `ruff` and strict `mypy` are verified against
+`livekit-agents` **1.8.6** and **1.8.7**, with no version branching in the plugin.
+Earlier versions were also checked against **2.0.0b1**; the current changes
+have not been retested on that beta.
 
 | Plugin | `livekit-agents` |
 | --- | --- |
-| 0.1.x | 1.8.6 – 2.0.0b1 (both verified) |
+| 0.1.x | >=1.8.6; current checks cover 1.8.6 and 1.8.7 |
 
 ## Installation
 
@@ -18,9 +19,34 @@ with no version branching in the plugin.
 pip install livekit-plugins-stepfun
 ```
 
-## Authentication
+## Configuration
 
-Set `STEPFUN_API_KEY`, or pass `api_key=` to the constructor.
+The plugin itself reads only `os.environ` — set `STEPFUN_API_KEY`, or pass
+`api_key=` to the constructor. It never loads a `.env` file, because a library
+quietly reading files from the working directory is surprising behaviour.
+
+The **examples** are applications, so they do load one. Copy the template and
+edit it:
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` documents every setting: credentials, cluster, the four model
+choices, voice, language and ASR transport, plus the LiveKit variables needed
+for `voice_agent.py dev`. Both `.env` and `.env.local` are gitignored;
+`.env.local` wins where they overlap, and an exported variable beats both, so
+one-off overrides still work:
+
+```bash
+STEPFUN_LANGUAGE=zh lk agent console examples/voice_agent.py
+```
+
+This needs the `examples` extra:
+
+```bash
+uv pip install -e '.[examples]'
+```
 
 ```bash
 export STEPFUN_API_KEY=<your-key>
@@ -115,17 +141,7 @@ Supported: `zh`, `en`, plus `ja`, `ko`, `fr`, `es` in preview.
 | `LLM` | `step-3.7-flash` | `step-5-preview`, `step-3.5-flash` |
 | `TTS` | `stepaudio-3-tts` | `stepaudio-2.5-tts`; `step-tts-2`, `step-tts-mini` (domestic) |
 
-**There is no streaming StepAudio 3 ASR.** `stepaudio-3-asr-stream` was tried
-against the live endpoint on 2026-10-14 and rejected:
-
-```json
-{"code": "invalid_value", "param": "model",
- "message": "unsupported model: stepaudio-3-asr-stream"}
-```
-
-StepAudio 3 ASR is submitted-audio only — reach it through `batch_model` with
-`use_streaming=False`, or via `recognize()`. The streaming endpoint accepts
-`stepaudio-2.5-asr-stream` only.
+**There is no streaming StepAudio 3 ASR.**
 
 These `Literal` types are for editor completion, not validation: any model
 string is accepted and forwarded to the server verbatim, which is where an
@@ -192,8 +208,53 @@ so wrapping this STT in one silently drops word alignment.
 
 ### Turn detection
 
-Both modes finalize correctly. All figures below were measured against the live
-service.
+The example selects turn handling **before** constructing `AgentSession`:
+
+| ASR transport | End of turn | Local VAD |
+| --- | --- | --- |
+| `websocket` | StepFun server VAD, `turn_detection="stt"` | Enabled for faster interruptions; optional |
+| `http` | Local audio turn detector (`v1-mini`) | Required for `StreamAdapter` segmentation |
+
+Streaming skips the local turn detector. Local VAD only improves interruption
+responsiveness; it does not gate audio sent to StepFun or decide when the
+streaming turn ends. Set `STEPFUN_LOCAL_VAD=false` to remove it: turn completion
+still uses StepFun's speech events, but interruptions must wait for an interim
+or final transcript. Adaptive audio interruption detection needs local VAD;
+the example explicitly selects basic interruption handling to avoid requiring
+LiveKit Cloud inference for a local console session. See
+[LiveKit's turn handling guide](https://docs.livekit.io/agents/logic/turns/).
+
+Batch mode always uses local VAD, even with `STEPFUN_LOCAL_VAD=false`. VAD
+segments the audio for batch STT while `inference.TurnDetector(version="v1-mini")`
+assesses turn completion directly from audio. The session waits for the batch
+transcript before replying. Pinning `v1-mini` keeps turn detection on the CPU
+even in dev mode; no cloud turn-detector credentials are required. See
+[LiveKit's audio turn detector](https://docs.livekit.io/agents/logic/turns/turn-detector/).
+Install the example dependencies before launching batch mode:
+
+```bash
+uv sync --extra examples --extra dev
+STEPFUN_ASR_TRANSPORT=http uv run lk agent console examples/voice_agent.py
+```
+
+Use `STEPFUN_ASR_TRANSPORT=websocket` for streaming. Do not use `"manual"`
+turn detection for this example: that mode requires explicit application calls
+to commit user turns.
+
+With local VAD enabled, the example stops a reply after at least
+`STEPFUN_MIN_INTERRUPTION_DURATION=0.2` seconds of detected speech, without
+waiting for a transcript or an end-of-turn prediction. This is a detection
+threshold, not a guarantee of total audible stopping latency. Increase it
+toward `0.5` if brief sounds interrupt too often.
+
+The example disables resumable false interruptions: detected speech cancels
+the reply rather than pausing and potentially resuming it. In the installed
+1.8.6/1.8.7 SDKs, the TCP console advertises pause support but does not send a
+pause command; cancellation sends the actual playback-clear command instead.
+The SDK's initial AEC warmup still applies to the first speaking turn.
+
+The figures below are historical measurements from earlier live-service runs,
+not latency guarantees or results of the current review.
 
 | | `server_vad=True` (default) | `server_vad=False` |
 | --- | --- | --- |
@@ -228,6 +289,57 @@ stt = stepfun.STT(server_vad=False)
 stream = stt.stream()
 stream.push_frame(frame)
 stream.end_input()   # flush() commits; the final follows
+```
+
+### Optional local noise suppression
+
+The voice-agent example supports two offline CPU backends:
+
+- `webrtc`: uses the installed LiveKit SDK's `AudioProcessingModule`; no extra
+  package, cloud account or runtime model download is required.
+- `rnnoise`: uses [RNNoise](https://github.com/xiph/rnnoise), through the optional
+  [pyrnnoise](https://github.com/pengzhendong/pyrnnoise) dependency.
+
+For WebRTC suppression with an already installed example environment:
+
+```bash
+STEPFUN_NOISE_CANCELLATION=webrtc uv run --no-sync lk agent console examples/voice_agent.py
+```
+
+For RNNoise:
+
+```bash
+uv sync --extra examples --extra noise-cancellation
+STEPFUN_NOISE_CANCELLATION=rnnoise uv run lk agent console examples/voice_agent.py
+```
+
+Set `STEPFUN_NOISE_CANCELLATION=webrtc` or `rnnoise` in `.env.local` to keep it
+selected. The default is `off`. Both backends reduce background noise; this
+integration does not configure acoustic echo cancellation or speaker isolation.
+An explicit `rnnoise` setting fails with installation instructions if its
+optional dependency or native library is unavailable. The native wheel must
+support your OS and CPU; consult
+[pyrnnoise's available wheels](https://pypi.org/project/pyrnnoise/#files).
+
+The same filter works with `voice_agent.py dev` and both ASR transports. It
+wraps the audio input selected by the SDK, including the console input that
+bypasses room-level noise cancellation. STT, local VAD and the local audio turn
+detector all receive the cleaned input. Denoiser state belongs to one session.
+
+Input is mixed to mono, resampled to 48 kHz and processed in 10 ms blocks off
+the event loop. This adds framing and processing latency. Silence is never
+gated or dropped, so StepFun server VAD can still finalize streaming turns.
+Incomplete final blocks are padded for processing and trimmed back to their
+original duration. Local VAD remains required in batch mode.
+
+The offline suite tests framing, resampling, cancellation-safe cleanup and
+audio delivery through both STT pipelines with a scripted denoiser. It also
+checks actual WebRTC noise suppression on synthetic noise. The native RNNoise
+test runs when `pyrnnoise` is installed:
+
+```bash
+uv sync --extra examples --extra dev --extra noise-cancellation
+uv run pytest -q tests/test_noise_cancellation.py
 ```
 
 ## Design notes
@@ -311,7 +423,15 @@ export STEPFUN_API_KEY=...
 uv run python examples/smoke_test.py                              # English
 uv run python examples/smoke_test.py --language zh                # Chinese
 uv run python examples/smoke_test.py --cluster domestic --language zh
+
+# Compare chat models in one run
+uv run python examples/smoke_test.py --llm-model step-3.7-flash,step-5-preview
 ```
+
+Every model is selectable: `--stt-model`, `--batch-model`, `--tts-model`,
+`--voice`, `--llm-model` (comma-separated, `none` to skip) and
+`--reasoning-effort`. A model that fails is reported and the run continues, so
+one rejected ID does not hide the rest.
 
 It synthesizes a phrase, transcribes that same audio back, and writes both the
 one-shot and streaming audio to `./smoke_out/` — so it needs no microphone and

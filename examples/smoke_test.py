@@ -1,6 +1,6 @@
 """Real-service smoke test for StepFun ASR + TTS. Needs a key and network.
 
-Exercises all four code paths against the live API and closes the loop: TTS
+Exercises all five code paths against the live API and closes the loop: TTS
 synthesizes a phrase, then ASR transcribes that same audio back, so nothing
 here needs a microphone or a LiveKit server.
 
@@ -23,6 +23,11 @@ What each check is actually for:
    is what cumulative deltas look like when mishandled.
 4. **Batch ASR (HTTP + SSE).** The path `offline_recognize=True` promises, and
    the one `FallbackAdapter` falls back to.
+5. **LLM chat.** Streaming text and tool calling over the OpenAI-compatible
+   endpoint. On reasoning models it also checks the claim this plugin relies
+   on: that `reasoning` never reaches the spoken text. `reasoning_tokens` in
+   the usage block proves the model *did* reason, so clean content alongside a
+   non-zero count means the separation is real rather than assumed.
 
 Audio is written to ./smoke_out/ so you can listen to it — a pitch problem is
 instantly obvious by ear even when the numbers look plausible.
@@ -33,18 +38,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 import pathlib
 import time
 from typing import Any
 
 import aiohttp
+from _config import get, load_env, require
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
+from livekit.agents import llm as llm_module
 from livekit.agents import stt as stt_module
 from livekit.agents.types import NOT_GIVEN
 
 from livekit import rtc
 from livekit.plugins import stepfun
+
+load_env()
 
 OUT_DIR = pathlib.Path("smoke_out")
 
@@ -59,21 +67,9 @@ NO_RETRY = APIConnectOptions(max_retry=0)
 
 
 def load_key() -> str:
-    key = os.environ.get("STEPFUN_API_KEY")
-    if key:
-        return key
-
-    for candidate in (pathlib.Path(".env"), pathlib.Path("../.env")):
-        if not candidate.is_file():
-            continue
-        for line in candidate.read_text().splitlines():
-            line = line.strip()
-            if line.startswith("STEPFUN_API_KEY="):
-                return line.split("=", 1)[1].strip().strip("'\"")
-
-    raise SystemExit(
-        "STEPFUN_API_KEY is not set. Export it, or put it in a .env file next to "
-        "this script's project root."
+    return require(
+        "STEPFUN_API_KEY",
+        hint="The ASR, TTS and LLM components all use the same key.",
     )
 
 
@@ -177,8 +173,7 @@ async def stt_streaming(
 ) -> None:
     print("\n[3] streaming ASR over WebSocket")
     if not frames:
-        print("  skipped: no audio to transcribe")
-        return
+        raise RuntimeError("streaming ASR cannot be verified: TTS produced no audio")
 
     from livekit.plugins.stepfun import stt as _stt_impl
 
@@ -259,29 +254,122 @@ async def stt_streaming(
         # With server VAD the server finalizes after hearing silence; once input
         # ends it hears nothing at all, so the final may never come. Saying so
         # beats printing interims and looking successful.
-        print(
-            f"  WARNING: no FINAL_TRANSCRIPT arrived within {finalize_timeout:.0f}s "
-            "of input ending."
+        raise RuntimeError(
+            f"no FINAL_TRANSCRIPT arrived within {finalize_timeout:.0f}s of input ending; "
+            "check the trailing silence and server VAD configuration"
         )
-        print("    In a live session the stream stays open and the next")
-        print("    utterance's silence triggers it; here input simply stopped.")
 
 
 async def stt_batch(stt: stepfun.STT, frames: list[rtc.AudioFrame]) -> None:
     print("\n[4] batch ASR over HTTP + SSE")
     if not frames:
-        print("  skipped: no audio to transcribe")
-        return
+        raise RuntimeError("batch ASR cannot be verified: TTS produced no audio")
 
     started = time.perf_counter()
     ev = await stt.recognize(frames, conn_options=NO_RETRY)
+    if not ev.alternatives or not ev.alternatives[0].text.strip():
+        raise RuntimeError("batch ASR returned an empty transcript for the test phrase")
     print(f"  took {time.perf_counter() - started:.2f}s")
     print(f"  FINAL: {ev.alternatives[0].text!r}")
 
 
+@llm_module.function_tool
+async def lookup_order(order_id: str) -> str:
+    """Look up the status of a customer order.
+
+    Args:
+        order_id: The order number to look up.
+    """
+    # Deterministic, so a tool round trip can be asserted rather than eyeballed.
+    return f"Order {order_id}: shipped, arriving Thursday."
+
+
+async def llm_chat(
+    model: str, reasoning_effort: str, api_key: str, cluster: str | None
+) -> None:
+    """One streaming completion, plus one tool round trip."""
+    print(f"\n[5] LLM chat — {model}")
+
+    chat_llm = stepfun.LLM(
+        model=model,
+        api_key=api_key,
+        cluster=cluster,
+        reasoning_effort=reasoning_effort,
+    )
+
+    try:
+        ctx = llm_module.ChatContext.empty()
+        ctx.add_message(role="user", content="In one short sentence: why is the sky blue?")
+
+        started = time.perf_counter()
+        first_token: float | None = None
+        text = ""
+        usage = None
+
+        try:
+            async with chat_llm.chat(chat_ctx=ctx, conn_options=NO_RETRY) as stream:
+                async for chunk in stream:
+                    if chunk.usage is not None:
+                        usage = chunk.usage
+                    delta = chunk.delta
+                    if delta is None or not delta.content:
+                        continue
+                    if first_token is None:
+                        first_token = time.perf_counter() - started
+                        # On a reasoning model the thinking happens before this,
+                        # so this is time to first *speakable* content — the
+                        # number that matters for voice.
+                        print(f"  first speakable token: {first_token * 1000:.0f}ms")
+                    text += delta.content
+        except Exception as exc:  # noqa: BLE001 - report and move to the next model
+            print(f"  FAILED: {type(exc).__name__}: {exc}")
+            return
+
+        print(f"  reply: {text.strip()!r}")
+
+        if usage is not None:
+            print(
+                f"  usage: prompt={usage.prompt_tokens} "
+                f"completion={usage.completion_tokens} "
+                f"reasoning={usage.reasoning_tokens}"
+            )
+            if usage.reasoning_tokens:
+                print("  ^ the model reasoned, and none of it appears in the reply")
+                print("    above — otherwise the agent would speak its thinking.")
+
+        # Tool calling: the model should ask for the tool, not invent an answer.
+        tool_ctx = llm_module.ChatContext.empty()
+        tool_ctx.add_message(role="user", content="What is the status of order A-4471?")
+
+        calls: list[str] = []
+        try:
+            async with chat_llm.chat(
+                chat_ctx=tool_ctx, tools=[lookup_order], conn_options=NO_RETRY
+            ) as stream:
+                async for chunk in stream:
+                    if chunk.delta and chunk.delta.tool_calls:
+                        for call in chunk.delta.tool_calls:
+                            calls.append(f"{call.name}({call.arguments})")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  tool call FAILED: {type(exc).__name__}: {exc}")
+            return
+
+        if calls:
+            print(f"  tool calls: {calls}")
+        else:
+            print("  no tool call requested — for this prompt that means tool")
+            print("    calling is not working on this model.")
+    finally:
+        await chat_llm.aclose()
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cluster", choices=["international", "domestic"], default=None)
+    parser.add_argument(
+        "--cluster",
+        choices=["international", "domestic"],
+        default=get("STEPFUN_CLUSTER"),
+    )
     parser.add_argument("--language", default=None, help="zh, en, ja, ko, fr, es")
     parser.add_argument("--voice", default=None)
     parser.add_argument("--tts-model", default=None)
@@ -313,6 +401,18 @@ async def main() -> None:
         default=1.5,
         help="seconds of silence appended after the speech, so server VAD "
         "has something to detect (default 1.5; server default is 800ms)",
+    )
+    parser.add_argument(
+        "--llm-model",
+        default="step-3.7-flash",
+        help="comma-separated chat models to try in turn, e.g. "
+        "step-3.7-flash,step-5-preview. Pass 'none' to skip.",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="lower effort means less silence before the reply starts",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -392,6 +492,10 @@ async def main() -> None:
         await tts.aclose()
         await stt.aclose()
         assert not session.closed, "plugin closed a caller-supplied session"
+
+    if args.llm_model.lower() != "none":
+        for model in [m.strip() for m in args.llm_model.split(",") if m.strip()]:
+            await llm_chat(model, args.reasoning_effort, api_key, args.cluster)
 
     oneshot.clear()
     streamed.clear()

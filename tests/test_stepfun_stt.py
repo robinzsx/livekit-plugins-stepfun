@@ -1026,3 +1026,119 @@ async def test_arbitrary_model_sent_in_session_update() -> None:
         "transcription"
     ]
     assert transcription["model"] == "stepaudio-9-asr-stream"
+
+
+async def test_session_created_does_not_acknowledge_configuration() -> None:
+    s = stepfun.STT()
+    ws = FakeWebSocket()
+    s._pool = FakePool(ws)  # type: ignore[assignment]
+    ws.queue_server_event({"type": "session.created"})
+    ws.queue_server_event({"type": "error", "error": {"code": "invalid_value",
+                                                       "message": "bad configuration"}})
+    stream = s.stream(conn_options=_no_retry())
+    stream.push_frame(_frame())
+    stream.end_input()
+    try:
+        with pytest.raises(APIStatusError):
+            [_ async for _ in stream]
+        assert not ws.frames_of_type("input_audio_buffer.append")
+        assert ws in s._pool.removed
+    finally:
+        await stream.aclose()
+
+
+async def test_session_created_followed_by_updated_is_accepted() -> None:
+    ws, _ = await _drive(stepfun.STT(), [{"type": "session.created"}, _SESSION_READY])
+    assert ws.frames_of_type("input_audio_buffer.append")
+
+
+async def test_end_input_commits_only_once() -> None:
+    ws, _ = await _drive(stepfun.STT(server_vad=False), [_SESSION_READY])
+    assert len(ws.frames_of_type("input_audio_buffer.commit")) == 1
+
+
+async def test_empty_stream_does_not_commit() -> None:
+    ws, _ = await _drive(stepfun.STT(server_vad=False), [_SESSION_READY], frames=0)
+    assert not ws.frames_of_type("input_audio_buffer.commit")
+
+
+async def test_streaming_reports_detected_language() -> None:
+    _, events = await _drive(stepfun.STT(language="en"), [
+        _SESSION_READY,
+        {"type": _DELTA, "text": "你好", "language": "zh"},
+        {"type": "conversation.item.input_audio_transcription.completed",
+         "transcript": "你好", "language": "zh"},
+    ])
+    transcripts = [e for e in events if e.alternatives]
+    assert transcripts
+    assert all(e.alternatives[0].language == "zh" for e in transcripts)
+
+
+async def test_batch_prewarm_does_not_open_streaming_socket() -> None:
+    session = _FakeSSESession([])
+    s = stepfun.STT(use_streaming=False, http_session=session)  # type: ignore[arg-type]
+    pool = FakePool(FakeWebSocket())
+    s._pool = pool  # type: ignore[assignment]
+    s.prewarm()
+    assert pool.prewarm_calls == 0
+    await s.aclose()
+
+
+@pytest.mark.parametrize("lines", [[], [
+    'data: {"type":"transcript.text.delta","delta":"unfinished"}',
+    'data: [DONE]',
+]])
+async def test_batch_rejects_truncated_response(lines: list[str]) -> None:
+    from livekit.agents import APIConnectionError
+
+    s = stepfun.STT(http_session=_FakeSSESession(lines))  # type: ignore[arg-type]
+    with pytest.raises(APIConnectionError, match="before transcript.text.done"):
+        await s.recognize([_frame()], conn_options=_no_retry())
+
+
+async def test_batch_returns_at_done_without_waiting_for_eof() -> None:
+    session = _FakeSSESession([
+        'data: {"type":"transcript.text.done","text":"complete"}',
+        'data: {"type":"error","message":"must not read past done"}',
+    ])
+    s = stepfun.STT(http_session=session)  # type: ignore[arg-type]
+    event = await s.recognize([_frame()], conn_options=_no_retry())
+    assert event.alternatives[0].text == "complete"
+
+
+async def test_interleaved_items_keep_separate_transcripts() -> None:
+    _, events = await _drive(stepfun.STT(), [
+        _SESSION_READY,
+        {"type": _DELTA, "item_id": "first", "text": "first turn"},
+        {"type": _DELTA, "item_id": "second", "text": "second turn"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "first"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "second"},
+    ])
+    assert _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT) == ["first turn", "second turn"]
+
+
+async def test_empty_final_does_not_restore_rejected_partial() -> None:
+    _, events = await _drive(stepfun.STT(), [
+        _SESSION_READY, {"type": _DELTA, "text": "discarded"},
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": ""},
+    ])
+    assert not _texts(events, stt.SpeechEventType.FINAL_TRANSCRIPT)
+
+
+def test_model_update_refreshes_word_alignment_capability() -> None:
+    speech = stepfun.STT(enable_timestamp_align=True)
+    assert speech.capabilities.aligned_transcript == "word"
+    speech.update_options(model="step-asr-1.1-stream")
+    assert speech.capabilities.aligned_transcript is False
+    speech.update_options(model="stepaudio-2.5-asr-stream")
+    assert speech.capabilities.aligned_transcript == "word"
+
+
+async def test_batch_empty_final_does_not_restore_rejected_delta() -> None:
+    session = _FakeSSESession([
+        'data: {"type":"transcript.text.delta","delta":"discarded"}',
+        'data: {"type":"transcript.text.done","text":""}',
+    ])
+    speech = stepfun.STT(http_session=session)  # type: ignore[arg-type]
+    event = await speech.recognize([_frame()])
+    assert event.alternatives[0].text == ""
