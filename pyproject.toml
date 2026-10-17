@@ -40,6 +40,11 @@ examples = [
     "livekit-plugins-openai>=1.8.6",
     "livekit-plugins-silero>=1.8.6",
 ]
+# Stronger denoising than the WebRTC suppression built into the SDK. Native
+# build, so optional; STEPFUN_NOISE_CANCELLATION=webrtc needs nothing extra.
+noise-cancellation = [
+    "pyrnnoise>=0.4.3,<0.5",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

@@ -178,6 +178,7 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_TTS_VOICE` | `vibrant-youth` | Voice ID |
 | `STEPFUN_LOCAL_VAD` | `true` | Local VAD; always enabled for batch ASR |
 | `STEPFUN_MIN_INTERRUPTION_DURATION` | `0.2` | Minimum detected speech, in seconds |
+| `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
 | `STEPFUN_PREWARM` | `true` | Warm connections before the caller speaks |
 | `LLM_PROVIDER` | `stepfun` | `stepfun`, `deepseek`, or `mix` |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | Chat model (`LLM_PROVIDER=deepseek`) |
@@ -210,6 +211,27 @@ A "turn" is one reply. Tool-call follow-ups are a fresh `chat()` call, so a
 multi-step exchange can switch mid-conversation; per-turn metrics record which
 model actually answered each turn.
 Reasoning happens before speakable content and can increase reply latency.
+
+## Noise cancellation
+
+Background noise reaches STT, VAD, and turn detection, so filtering happens
+before the session sees the audio and all three get the same cleaned signal:
+
+```bash
+STEPFUN_NOISE_CANCELLATION=webrtc uv run lk agent console examples/voice_agent.py
+```
+
+`webrtc` needs nothing extra — the audio-processing module ships with the
+LiveKit SDK. `rnnoise` is a stronger model but a native build:
+
+```bash
+uv sync --extra examples --extra noise-cancellation
+STEPFUN_NOISE_CANCELLATION=rnnoise uv run lk agent console examples/voice_agent.py
+```
+
+These are noise *suppressors*: they reduce steady background sound. They do not
+provide acoustic echo cancellation, which is a property of the client device,
+not of the agent.
 
 ## Build your own agent
 

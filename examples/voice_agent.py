@@ -94,6 +94,17 @@ _INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2"))
 if not 0.05 <= _INTERRUPTION_DURATION <= 5.0:
     raise ValueError("STEPFUN_MIN_INTERRUPTION_DURATION must be between 0.05 and 5 seconds")
 
+# off | webrtc | rnnoise. Filtering happens before the session fans audio out to
+# STT, VAD and turn detection, so all three see the same cleaned signal.
+#
+# webrtc is the usual choice: the WebRTC audio-processing module is already in
+# the LiveKit SDK and costs nothing extra. rnnoise is a stronger model but is a
+# native build, hence a separate `noise-cancellation` extra; ask for it
+# explicitly rather than falling back to it and failing at import time.
+_NOISE_CANCELLATION = get("STEPFUN_NOISE_CANCELLATION", "off")
+if _NOISE_CANCELLATION not in ("off", "webrtc", "rnnoise"):
+    raise ValueError("STEPFUN_NOISE_CANCELLATION must be 'off', 'webrtc' or 'rnnoise'")
+
 # Pays for DNS, TLS, the WebSocket upgrade and — for TTS — the session
 # handshake before the user says anything. Set false to compare startup cost.
 _PREWARM = get_bool("STEPFUN_PREWARM", True)
@@ -184,6 +195,26 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=turn_handling(),
     )
 
+    # Per-session native state: a denoiser is stateful and must never be shared
+    # between callers, so it is built here rather than at module scope.
+    denoiser = None
+    filtered_input = None
+    if _NOISE_CANCELLATION != "off":
+        from _noise_cancellation import FilteredAudioInput, NoiseSuppressor
+
+        denoiser = NoiseSuppressor(method=_NOISE_CANCELLATION)
+
+    async def _close_denoiser() -> None:
+        # aclose() on the filter drains the buffer and releases the native
+        # handle; the bare suppressor is only reachable when no input existed.
+        if filtered_input is not None:
+            await filtered_input.aclose()
+        elif denoiser is not None:
+            denoiser.close()
+
+    if denoiser is not None:
+        ctx.add_shutdown_callback(_close_denoiser)
+
     # Where the latency numbers come from: ASR first partial and final, LLM
     # time to first token, TTS time to first byte.
     usage = metrics.ModelUsageCollector()
@@ -198,7 +229,21 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_log_usage)
 
-    await session.start(agent=Assistant(), room=ctx.room)
+    try:
+        await session.start(agent=Assistant(), room=ctx.room)
+
+        # Install the filter after start(): console and room input are both
+        # selected during start() and would overwrite anything set before it.
+        if denoiser is not None:
+            if session.input.audio is None:
+                denoiser.close()  # text-only console mode has no input to filter
+            else:
+                filtered_input = FilteredAudioInput(session.input.audio, processor=denoiser)
+                session.input.audio = filtered_input
+    except BaseException:
+        # start() failed: the shutdown callback may never run.
+        await _close_denoiser()
+        raise
 
 
 # The lk CLI imports this module and discovers this server without executing
