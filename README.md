@@ -184,6 +184,7 @@ See [.env.example](.env.example) for the complete template.
 | `LLM_PROVIDER` | `stepfun` | `stepfun` or `deepseek` |
 | `DEEPSEEK_MODEL` | `deepseek-v4.1-flash` | Chat model (`LLM_PROVIDER=deepseek`) |
 | `DEEPSEEK_API_KEY` | — | Required when DeepSeek is selectable |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | Gateway or proxy endpoint |
 
 Reasoning effort is documented for `step-3.7-flash`; it is omitted for models that
 do not document it.
@@ -205,6 +206,20 @@ LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-... \
 The provider is fixed for the life of the process, so comparing two models
 means two runs rather than one conversation alternating between them. That keeps
 each transcript attributable to the model named in its config block.
+
+To route DeepSeek through a gateway, a proxy, or a private host, override its
+endpoint. `/v1` is appended when absent, since a doubled `/v1/v1` 404s in a way
+that is annoying to diagnose:
+
+```bash
+LLM_PROVIDER=deepseek \
+  DEEPSEEK_BASE_URL=https://my-gateway.internal/v1 \
+  DEEPSEEK_API_KEY=sk-... \
+  uv run lk agent console examples/voice_agent.py
+```
+
+StepFun's endpoint is selected by `STEPFUN_CLUSTER` instead, so it has no
+equivalent URL setting in the example.
 
 Reasoning happens before speakable content and can increase reply latency.
 
