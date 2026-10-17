@@ -28,10 +28,10 @@ from livekit.agents import llm
 # clear 404 from the provider's own API.
 
 DEFAULT_STEPFUN_MODEL = "step-3.7-flash"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4.1-flash"
 
-#: `reasoning_effort` is only documented for StepFun's step-3.7-flash.
-STEPFUN_REASONING_EFFORT_MODELS = frozenset({"step-3.7-flash"})
+#: Models whose API documents `reasoning_effort`.
+STEPFUN_REASONING_EFFORT_MODELS = frozenset({"step-5-preview", "step-3.7-flash"})
 
 PROVIDERS = ("stepfun", "deepseek")
 

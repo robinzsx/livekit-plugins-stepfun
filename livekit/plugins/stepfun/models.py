@@ -182,11 +182,13 @@ OPENAI_COMPAT_SUFFIX = "/v1"
 
 
 LLMModels = Literal[
+    # Flagship reasoning model. Reasons by default and takes a documented
+    # effort level; there is no setting that turns reasoning off.
     "step-5-preview",
     # Reasoning model with three documented effort levels. The provider's own
     # voice-candidate suggestion, and the default here.
     "step-3.7-flash",
-    # Text only, 256K context, sparse MoE.
+    # Text only, 256K context, sparse MoE. No documented effort levels.
     "step-3.5-flash",
 ]
 
@@ -194,4 +196,6 @@ DEFAULT_LLM_MODEL = "step-3.7-flash"
 
 ReasoningEffort = Literal["low", "medium", "high"]
 
-REASONING_EFFORT_LLM_MODELS = frozenset({"step-3.7-flash"})
+#: Models whose API documents `reasoning_effort`. Sending it elsewhere is
+#: accepted but may be ignored, so the plugin warns instead of guessing.
+REASONING_EFFORT_LLM_MODELS = frozenset({"step-5-preview", "step-3.7-flash"})
