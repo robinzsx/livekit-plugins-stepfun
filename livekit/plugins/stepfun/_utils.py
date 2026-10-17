@@ -20,7 +20,7 @@ from .models import (
     CLUSTER_HTTP_BASE_URLS,
     CLUSTER_WS_BASE_URLS,
     DEFAULT_CLUSTER,
-    INTERNATIONAL_TTS_VOICES,
+    GLOBAL_TTS_VOICES,
     OPENAI_COMPAT_SUFFIX,
     Cluster,
     TTSVoices,
@@ -32,8 +32,8 @@ _KNOWN_TTS_VOICES = frozenset(get_args(TTSVoices))
 def resolve_api_key(api_key: str | None) -> str:
     """Explicit argument wins, then the environment variable.
 
-    Note that the two clusters issue separate credentials: a domestic key will
-    not authenticate against the international endpoint, or vice versa.
+    Note that the two clusters issue separate credentials: a mainland-China key
+    will not authenticate against the global endpoint, or vice versa.
     """
     key = api_key or os.environ.get("STEPFUN_API_KEY")
     if not key:
@@ -48,11 +48,11 @@ def resolve_cluster(cluster: Cluster | None) -> Cluster:
     value = cluster if cluster is not None else os.environ.get("STEPFUN_CLUSTER")
     if not value:
         return DEFAULT_CLUSTER
-    if value == "international":
-        return "international"
-    if value == "domestic":
-        return "domestic"
-    raise ValueError(f"STEPFUN_CLUSTER must be 'international' or 'domestic', got {value!r}")
+    if value == "global":
+        return "global"
+    if value == "china":
+        return "china"
+    raise ValueError(f"STEPFUN_CLUSTER must be 'global' or 'china', got {value!r}")
 
 
 def resolve_ws_base_url(base_url: str | None, cluster: Cluster) -> str:
@@ -83,10 +83,10 @@ def auth_headers(api_key: str) -> dict[str, str]:
 
 
 def warn_if_voice_unavailable(voice: TTSVoices | str, cluster: Cluster) -> None:
-    """Warn when a voice is known to be domestic-only but used internationally."""
-    if cluster != "international":
+    """Warn when a voice is known to be mainland-China only but used globally."""
+    if cluster != "global":
         return
-    if voice in INTERNATIONAL_TTS_VOICES:
+    if voice in GLOBAL_TTS_VOICES:
         return
     if voice not in _KNOWN_TTS_VOICES:
         # Unrecognized entirely — most likely a cloned voice, which is
@@ -94,7 +94,7 @@ def warn_if_voice_unavailable(voice: TTSVoices | str, cluster: Cluster) -> None:
         return
 
     logger.warning(
-        "voice is not published for the international cluster; the request will "
+        "voice is not published for the global cluster; the request will "
         "likely fail with 400 voice_id_invalid. Use TTS.list_voices() to see "
         "what is available.",
         extra={"voice": voice, "cluster": cluster},

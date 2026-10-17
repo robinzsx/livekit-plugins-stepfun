@@ -48,8 +48,8 @@ class LLM(_openai.LLM):  # type: ignore[misc, unused-ignore]
         Args:
             model: Chat model ID, defaulting to step-3.7-flash.
             api_key: API key, falling back to STEPFUN_API_KEY.
-            cluster: international or domestic; defaults to STEPFUN_CLUSTER,
-                then international. Credentials are cluster-specific.
+            cluster: "global" or "china" (mainland China); defaults to
+                STEPFUN_CLUSTER, then global. Credentials are cluster-specific.
             base_url: Override the HTTP base URL; /v1 is appended if absent.
             reasoning_effort: low, medium, or high. Undocumented models log a warning.
             kwargs: Additional options for the OpenAI plugin's LLM client.

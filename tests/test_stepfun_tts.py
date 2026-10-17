@@ -68,7 +68,7 @@ def test_defaults() -> None:
     t = stepfun.TTS()
     assert t.model == "stepaudio-3-tts"
     assert t.provider == "StepFun"
-    assert t._opts.cluster == "international"
+    assert t._opts.cluster == "global"
     # An unknown voice is rejected outright with 400 voice_id_invalid, so the
     # default has to be a real ID present on both clusters.
     assert t._opts.voice == "vibrant-youth"

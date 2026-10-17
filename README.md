@@ -68,7 +68,7 @@ appends `/v1` to its base URL when absent.
 
 | Setting | Default | Alternative |
 | --- | --- | --- |
-| `STEPFUN_CLUSTER` / `cluster` | `international` (`api.stepfun.ai`) | `domestic` (`api.stepfun.com`) |
+| `STEPFUN_CLUSTER` / `cluster` | `global` (`api.stepfun.ai`) | `china` (`api.stepfun.com`, mainland China) |
 | STT streaming model | `stepaudio-2.5-asr-stream` | Custom model string |
 | STT batch model | `stepaudio-3-asr-max` | `stepaudio-2.5-asr` |
 | TTS model | `stepaudio-3-tts` | `stepaudio-2.5-tts` |
@@ -76,8 +76,8 @@ appends `/v1` to its base URL when absent.
 | Language | Server default, English | `zh`, `en`; `ja`, `ko`, `fr`, `es` in preview |
 | TTS voice | `vibrant-youth` | Discover with `await tts.list_voices()` |
 
-Keys belong to their issuing cluster. Use `cluster="domestic"` or set
-`STEPFUN_CLUSTER=domestic` for a domestic key. Model and voice availability
+Keys belong to their issuing cluster. Use `cluster="china"` or set
+`STEPFUN_CLUSTER=china` for a mainland-China key. Model and voice availability
 can differ between clusters; custom model and cloned voice IDs are accepted
 and validated by the service.
 
@@ -98,7 +98,7 @@ stt = stepfun.STT(
 ```
 
 Timestamp alignment is advertised only for known supported streaming models.
-Batch recognition accepts `hotwords=[...]` on the domestic cluster.
+Batch recognition accepts `hotwords=[...]` on the mainland-China cluster.
 
 To use a batch model for conversation, supply local VAD so LiveKit can segment
 utterances and wrap the plugin in `stt.StreamAdapter`:
@@ -172,7 +172,7 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_ASR_TRANSPORT` | `websocket` | `websocket` or `http` |
 | `STEPFUN_ASR_MODEL` | `stepaudio-2.5-asr-stream` | Streaming ASR |
 | `STEPFUN_BATCH_ASR_MODEL` | `stepaudio-3-asr-max` | Batch ASR |
-| `STEPFUN_LLM_MODEL` | `step-3.7-flash` | Chat model |
+| `STEPFUN_LLM_MODEL` | `step-3.7-flash` | Chat model (`LLM_PROVIDER=stepfun`) |
 | `STEPFUN_REASONING_EFFORT` | `low` | `low`, `medium`, or `high` |
 | `STEPFUN_TTS_MODEL` | `stepaudio-3-tts` | Speech synthesis model |
 | `STEPFUN_TTS_VOICE` | `vibrant-youth` | Voice ID |
@@ -181,8 +181,36 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
 | `STEPFUN_MAX_UNRECOVERABLE_ERRORS` | `25` | Provider errors tolerated before the session closes |
 | `STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES` | `3` | Failed trials in a row that stop an evaluation run |
+| `LLM_PROVIDER` | `stepfun` | `stepfun`, `deepseek`, or `mix` |
+| `DEEPSEEK_MODEL` | `deepseek-chat` | Chat model (`LLM_PROVIDER=deepseek`) |
+| `DEEPSEEK_API_KEY` | — | Required when DeepSeek is selectable |
+| `LLM_MIX_PROVIDERS` | `stepfun,deepseek` | Legs of a `mix` run |
+| `LLM_MIX_STRATEGY` | `round_robin` | `round_robin` or `weighted` |
+| `LLM_MIX_WEIGHTS` | unweighted | e.g. `stepfun:3,deepseek:1` |
 
-Reasoning effort is documented for `step-3.7-flash`; other models log a warning.
+Reasoning effort is documented for `step-3.7-flash`; it is omitted for models that
+do not document it.
+
+### Switching the chat model
+
+STT and TTS are always StepFun. Only the chat model is pluggable:
+
+```bash
+# Everything on StepFun (default, unchanged behaviour)
+uv run lk agent console examples/voice_agent.py
+
+# DeepSeek for chat, StepFun for speech
+LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-... \
+  uv run lk agent console examples/voice_agent.py
+
+# Alternate models turn by turn, to compare them on the same conversation
+LLM_PROVIDER=mix LLM_MIX_STRATEGY=round_robin DEEPSEEK_API_KEY=sk-... \
+  uv run lk agent console examples/voice_agent.py
+```
+
+A "turn" is one reply. Tool-call follow-ups are a fresh `chat()` call, so a
+multi-step exchange can switch mid-conversation; per-turn metrics record which
+model actually answered each turn.
 Reasoning happens before speakable content and can increase reply latency.
 
 The agent can apply local CPU noise suppression before audio reaches STT,
@@ -207,7 +235,7 @@ This example makes live API calls and writes audio to `smoke_out/`:
 
 ```bash
 uv run python examples/smoke_test.py
-uv run python examples/smoke_test.py --language zh --cluster domestic
+uv run python examples/smoke_test.py --language zh --cluster china
 uv run python examples/smoke_test.py --llm-model step-3.7-flash,step-5-preview
 uv run python examples/smoke_test.py --help
 ```

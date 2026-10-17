@@ -123,13 +123,13 @@ class STT(stt.STT):
             batch_model: HTTP + SSE model used by recognize() and batch sessions.
             language: Recognition language; the service defaults to English.
             api_key: API key, falling back to STEPFUN_API_KEY.
-            cluster: international or domestic; defaults to STEPFUN_CLUSTER,
-                then international. Credentials are cluster-specific.
+            cluster: "global" or "china" (mainland China); defaults to
+                STEPFUN_CLUSTER, then global. Credentials are cluster-specific.
             base_url: Override the WebSocket base URL.
             http_base_url: Override the HTTP base URL.
             sample_rate: Streaming input rate; LiveKit resamples incoming audio.
             prompt: Context hints for streaming recognition.
-            hotwords: Batch recognition hints on the domestic cluster.
+            hotwords: Batch recognition hints on the mainland-China cluster.
             enable_itn: Enable inverse text normalization.
             enable_timestamp_align: Request word alignment on supported streaming models.
             server_vad: Use server endpointing. Disable for manual flush() commits.
@@ -325,7 +325,7 @@ class STT(stt.STT):
         }
         if is_given(opts.language):
             transcription["language"] = opts.language
-        if opts.hotwords and opts.cluster == "domestic":
+        if opts.hotwords and opts.cluster == "china":
             transcription["hotwords"] = opts.hotwords
 
         payload = {

@@ -68,17 +68,17 @@ def test_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         stepfun.STT()
 
 
-def test_defaults_to_international_cluster() -> None:
+def test_defaults_to_global_cluster() -> None:
     s = stepfun.STT()
-    assert s._opts.cluster == "international"
+    assert s._opts.cluster == "global"
     assert s._opts.ws_base_url == "wss://api.stepfun.ai"
     assert s._opts.http_base_url == "https://api.stepfun.ai"
 
 
 def test_env_cluster_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STEPFUN_CLUSTER", "domestic")
+    monkeypatch.setenv("STEPFUN_CLUSTER", "china")
     s = stepfun.STT()
-    assert s._opts.cluster == "domestic"
+    assert s._opts.cluster == "china"
     assert s._opts.ws_base_url == "wss://api.stepfun.com"
 
 
@@ -680,9 +680,9 @@ async def test_recognize_raises_on_error_event() -> None:
         await s.recognize([_frame()], conn_options=_no_retry())
 
 
-async def test_recognize_omits_hotwords_on_international_cluster() -> None:
-    # hotwords is documented for the domestic cluster only; sending it
-    # internationally risks a 400 on an unknown parameter.
+async def test_recognize_omits_hotwords_on_global_cluster() -> None:
+    # hotwords is documented for the mainland-China cluster only; sending it
+    # on the global cluster risks a 400 on an unknown parameter.
     session = _FakeSSESession(['data: {"type":"transcript.text.done","text":"x"}'])
     s = stepfun.STT(hotwords=["livekit"], http_session=session)  # type: ignore[arg-type]
 
@@ -690,10 +690,10 @@ async def test_recognize_omits_hotwords_on_international_cluster() -> None:
     assert "hotwords" not in session.json["audio"]["input"]["transcription"]
 
 
-async def test_recognize_sends_hotwords_on_domestic_cluster() -> None:
+async def test_recognize_sends_hotwords_on_china_cluster() -> None:
     session = _FakeSSESession(['data: {"type":"transcript.text.done","text":"x"}'])
     s = stepfun.STT(
-        cluster="domestic",
+        cluster="china",
         hotwords=["livekit"],
         http_session=session,  # type: ignore[arg-type]
     )

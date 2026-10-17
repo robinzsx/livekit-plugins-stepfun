@@ -174,8 +174,8 @@ class TTS(tts.TTS):
             markdown_filter: Request Markdown filtering.
             timestamp: Request streaming word-level subtitles.
             api_key: API key, falling back to STEPFUN_API_KEY.
-            cluster: international or domestic; defaults to STEPFUN_CLUSTER,
-                then international. Credentials are cluster-specific.
+            cluster: "global" or "china" (mainland China); defaults to
+                STEPFUN_CLUSTER, then global. Credentials are cluster-specific.
             base_url: Override the WebSocket base URL.
             http_base_url: Override the HTTP base URL.
             enable_inline_instruction: Preserve parenthesized performance directives

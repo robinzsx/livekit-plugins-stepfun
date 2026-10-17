@@ -503,7 +503,7 @@ async def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--only", choices=["llm", "tts", "stt", "all"], default="all")
-    p.add_argument("--cluster", choices=["international", "domestic"],
+    p.add_argument("--cluster", choices=["global", "china"],
                    default=get("STEPFUN_CLUSTER"))
     p.add_argument("--language", default=get("STEPFUN_LANGUAGE", "en"))
     p.add_argument("--llm-model", default=get("STEPFUN_LLM_MODEL", "step-3.7-flash"))

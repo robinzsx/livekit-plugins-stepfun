@@ -315,7 +315,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--cluster",
-        choices=["international", "domestic"],
+        choices=["global", "china"],
         default=get("STEPFUN_CLUSTER"),
     )
     parser.add_argument(
@@ -493,5 +493,5 @@ if __name__ == "__main__":
         raise SystemExit(
             f"\nCould not reach StepFun: {exc}\n"
             "  Check network egress to api.stepfun.ai (or .com with "
-            "--cluster domestic).\n"
+            "--cluster china).\n"
         ) from None

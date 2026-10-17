@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from typing import Literal
 
-Cluster = Literal["international", "domestic"]
+#: StepFun's two regional deployments: "global" (api.stepfun.ai) and "china"
+#: (api.stepfun.com, mainland China). Credentials are cluster-specific.
+Cluster = Literal["global", "china"]
 
-DEFAULT_CLUSTER: Cluster = "international"
+DEFAULT_CLUSTER: Cluster = "global"
 
 CLUSTER_WS_BASE_URLS: dict[Cluster, str] = {
-    "international": "wss://api.stepfun.ai",
-    "domestic": "wss://api.stepfun.com",
+    "global": "wss://api.stepfun.ai",
+    "china": "wss://api.stepfun.com",
 }
 
 CLUSTER_HTTP_BASE_URLS: dict[Cluster, str] = {
-    "international": "https://api.stepfun.ai",
-    "domestic": "https://api.stepfun.com",
+    "global": "https://api.stepfun.ai",
+    "china": "https://api.stepfun.com",
 }
 
 
@@ -23,8 +25,8 @@ Language = Literal["zh", "en", "ja", "ko", "fr", "es"]
 #: Streaming ASR, over the bidirectional WebSocket.
 STTModels = Literal[
     "stepaudio-2.5-asr-stream",
-    # Domestic cluster only, and documented as being phased out. The
-    # international endpoint accepts stepaudio-2.5-asr-stream exclusively.
+    # Mainland-China cluster only, and documented as being phased out. The
+    # global endpoint accepts stepaudio-2.5-asr-stream exclusively.
     "step-asr-1.1-stream",
 ]
 
@@ -37,7 +39,7 @@ TIMESTAMP_ALIGN_STT_MODELS = frozenset({"stepaudio-2.5-asr-stream"})
 STTBatchModels = Literal[
     "stepaudio-3-asr-max",
     "stepaudio-2.5-asr",
-    # Domestic cluster only.
+    # Mainland-China cluster only.
     "stepaudio-2-asr-pro",
 ]
 
@@ -45,7 +47,7 @@ STTBatchModels = Literal[
 TTSModels = Literal[
     "stepaudio-3-tts",
     "stepaudio-2.5-tts",
-    # Domestic cluster only.
+    # Mainland-China cluster only.
     "step-tts-2",
     "step-tts-mini",
     # Deprecated by the provider; existing callers keep working.
@@ -107,7 +109,8 @@ TTSVoices = Literal[
     "yingwennvsheng",
 ]
 
-INTERNATIONAL_TTS_VOICES = frozenset(
+#: Voices published on the global cluster, i.e. available outside mainland China.
+GLOBAL_TTS_VOICES = frozenset(
     {
         "elegantgentle-female",
         "lively-girl",
@@ -124,8 +127,8 @@ INTERNATIONAL_TTS_VOICES = frozenset(
 DEFAULT_TTS_VOICE = "vibrant-youth"
 
 SYSTEM_VOICES_MODEL: dict[Cluster, str] = {
-    "international": "stepaudio-2.5-tts",
-    "domestic": "step-tts-2",
+    "global": "stepaudio-2.5-tts",
+    "china": "step-tts-2",
 }
 
 

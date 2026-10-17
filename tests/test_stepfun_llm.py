@@ -23,29 +23,29 @@ requires_openai = pytest.mark.skipif(
 def test_llm_base_url_gets_version_suffix() -> None:
     # The OpenAI-compatible client expects the API version in the base URL
     # rather than in each request path.
-    assert _utils.resolve_llm_base_url(None, "international") == "https://api.stepfun.ai/v1"
-    assert _utils.resolve_llm_base_url(None, "domestic") == "https://api.stepfun.com/v1"
+    assert _utils.resolve_llm_base_url(None, "global") == "https://api.stepfun.ai/v1"
+    assert _utils.resolve_llm_base_url(None, "china") == "https://api.stepfun.com/v1"
 
 
 def test_llm_base_url_not_doubled() -> None:
     # A doubled /v1/v1 returns 404 in a way that is annoying to diagnose, so an
     # explicit base_url that already carries the suffix is left alone.
     assert (
-        _utils.resolve_llm_base_url("https://api.stepfun.ai/v1", "international")
+        _utils.resolve_llm_base_url("https://api.stepfun.ai/v1", "global")
         == "https://api.stepfun.ai/v1"
     )
 
 
 def test_llm_base_url_override_wins() -> None:
     assert (
-        _utils.resolve_llm_base_url("https://proxy.internal", "international")
+        _utils.resolve_llm_base_url("https://proxy.internal", "global")
         == "https://proxy.internal/v1"
     )
 
 
 def test_llm_base_url_strips_trailing_slash() -> None:
     assert (
-        _utils.resolve_llm_base_url("https://api.stepfun.ai/", "international")
+        _utils.resolve_llm_base_url("https://api.stepfun.ai/", "global")
         == "https://api.stepfun.ai/v1"
     )
 
@@ -91,17 +91,17 @@ else:
 
 
 @requires_openai
-def test_llm_defaults_to_international_cluster() -> None:
+def test_llm_defaults_to_global_cluster() -> None:
     llm = stepfun.LLM()
     assert llm.model == DEFAULT_LLM_MODEL
     assert llm.provider == "StepFun"
-    assert llm.cluster == "international"
+    assert llm.cluster == "global"
 
 
 @requires_openai
 def test_llm_honours_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STEPFUN_CLUSTER", "domestic")
-    assert stepfun.LLM().cluster == "domestic"
+    monkeypatch.setenv("STEPFUN_CLUSTER", "china")
+    assert stepfun.LLM().cluster == "china"
 
 
 @requires_openai
