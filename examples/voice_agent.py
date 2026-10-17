@@ -54,11 +54,11 @@ _GREETING = get("AGENT_GREETING", "Hi! How can I help you today?")
 GREETING = None if (_GREETING or "").strip().lower() in ("none", "off") else _GREETING
 
 # -- chat model --------------------------------------------------------------
-# stepfun | deepseek | mix. Model IDs are read by _llm_providers, which owns
-# STEPFUN_LLM_MODEL and DEEPSEEK_MODEL.
+# stepfun | deepseek. Chosen once per process; model IDs are read by
+# _llm_providers, which owns STEPFUN_LLM_MODEL and DEEPSEEK_MODEL.
 _LLM_PROVIDER = (get("LLM_PROVIDER", "stepfun") or "stepfun").strip().lower()
-if _LLM_PROVIDER not in ("stepfun", "deepseek", "mix"):
-    raise ValueError("LLM_PROVIDER must be 'stepfun', 'deepseek' or 'mix'")
+if _LLM_PROVIDER not in ("stepfun", "deepseek"):
+    raise ValueError("LLM_PROVIDER must be 'stepfun' or 'deepseek'")
 
 # low / medium / high. Documented for step-3.7-flash; lower effort means less
 # silence before the reply starts.

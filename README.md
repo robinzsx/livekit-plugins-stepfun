@@ -180,12 +180,9 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_MIN_INTERRUPTION_DURATION` | `0.2` | Minimum detected speech, in seconds |
 | `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
 | `STEPFUN_PREWARM` | `true` | Warm connections before the caller speaks |
-| `LLM_PROVIDER` | `stepfun` | `stepfun`, `deepseek`, or `mix` |
+| `LLM_PROVIDER` | `stepfun` | `stepfun` or `deepseek` |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | Chat model (`LLM_PROVIDER=deepseek`) |
 | `DEEPSEEK_API_KEY` | — | Required when DeepSeek is selectable |
-| `LLM_MIX_PROVIDERS` | `stepfun,deepseek` | Legs of a `mix` run |
-| `LLM_MIX_STRATEGY` | `round_robin` | `round_robin` or `weighted` |
-| `LLM_MIX_WEIGHTS` | unweighted | e.g. `stepfun:3,deepseek:1` |
 
 Reasoning effort is documented for `step-3.7-flash`; it is omitted for models that
 do not document it.
@@ -202,14 +199,12 @@ uv run lk agent console examples/voice_agent.py
 LLM_PROVIDER=deepseek DEEPSEEK_API_KEY=sk-... \
   uv run lk agent console examples/voice_agent.py
 
-# Alternate models turn by turn, to compare them on the same conversation
-LLM_PROVIDER=mix LLM_MIX_STRATEGY=round_robin DEEPSEEK_API_KEY=sk-... \
-  uv run lk agent console examples/voice_agent.py
 ```
 
-A "turn" is one reply. Tool-call follow-ups are a fresh `chat()` call, so a
-multi-step exchange can switch mid-conversation; per-turn metrics record which
-model actually answered each turn.
+The provider is fixed for the life of the process, so comparing two models
+means two runs rather than one conversation alternating between them. That keeps
+each transcript attributable to the model named in its config block.
+
 Reasoning happens before speakable content and can increase reply latency.
 
 ## Noise cancellation
