@@ -14,9 +14,6 @@ venv/
 dist/
 build/
 
-# Smoke-test audio output
-smoke_out/
-
 # Tooling caches
 .mypy_cache/
 .pytest_cache/
@@ -26,7 +23,3 @@ smoke_out/
 .env
 .env.*
 !.env.example
-
-# Local evaluation datasets and output
-/mono/
-/eval_results/
