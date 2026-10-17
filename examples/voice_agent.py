@@ -28,11 +28,11 @@ load_env()
 
 logger = logging.getLogger("stepfun-voice-agent")
 
-# stepfun | deepseek | mix. Per-provider model IDs are read by the provider
-# module (STEPFUN_LLM_MODEL, DEEPSEEK_MODEL), not here.
+# stepfun | deepseek. Chosen once per process; per-provider model IDs are read
+# by the provider module (STEPFUN_LLM_MODEL, DEEPSEEK_MODEL), not here.
 _LLM_PROVIDER = (get("LLM_PROVIDER", "stepfun") or "stepfun").strip().lower()
-if _LLM_PROVIDER not in ("stepfun", "deepseek", "mix"):
-    raise ValueError("LLM_PROVIDER must be 'stepfun', 'deepseek' or 'mix'")
+if _LLM_PROVIDER not in ("stepfun", "deepseek"):
+    raise ValueError("LLM_PROVIDER must be 'stepfun' or 'deepseek'")
 
 # low / medium / high. Documented for step-3.7-flash; lower effort means less
 # silence before the reply starts.
