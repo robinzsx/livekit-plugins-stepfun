@@ -6,6 +6,7 @@ import logging
 
 from _config import get, get_bool, load_env
 from _eval_runtime import INSTRUCTIONS, EvaluationController, InstrumentedAgent
+from _llm_providers import build_llm, describe_llm
 from livekit.agents import (
     AgentServer,
     AgentSession,
@@ -27,7 +28,11 @@ load_env()
 
 logger = logging.getLogger("stepfun-voice-agent")
 
-_LLM_MODEL = get("STEPFUN_LLM_MODEL", "step-3.7-flash")
+# stepfun | deepseek | mix. Per-provider model IDs are read by the provider
+# module (STEPFUN_LLM_MODEL, DEEPSEEK_MODEL), not here.
+_LLM_PROVIDER = (get("LLM_PROVIDER", "stepfun") or "stepfun").strip().lower()
+if _LLM_PROVIDER not in ("stepfun", "deepseek", "mix"):
+    raise ValueError("LLM_PROVIDER must be 'stepfun', 'deepseek' or 'mix'")
 
 # low / medium / high. Documented for step-3.7-flash; lower effort means less
 # silence before the reply starts.
@@ -162,11 +167,9 @@ async def entrypoint(ctx: JobContext) -> None:
         stt.prewarm()
         tts.prewarm()
 
-    chat = stepfun.LLM(
-        model=_LLM_MODEL,
-        **({"reasoning_effort": _REASONING_EFFORT} if _REASONING_EFFORT != "none" else {}),
-    )
+    chat = build_llm(reasoning_effort=_REASONING_EFFORT)
 
+    logger.info("llm: %s", describe_llm(chat))
     session = AgentSession(
         vad=ctx.proc.userdata["vad"] if _USE_LOCAL_VAD else None,
         stt=stt,
@@ -202,7 +205,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 "asr_transport": "websocket" if _USE_STREAMING_ASR else "http",
                 "asr_model": stt.model,
                 "batch_asr_model": _BATCH_ASR_MODEL,
-                "llm_model": chat.model,
+                **describe_llm(chat),
                 "reasoning_effort": _REASONING_EFFORT,
                 "tts_model": tts.model,
                 "voice": _VOICE,
