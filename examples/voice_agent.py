@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 
 from _config import get, get_bool, load_env
+from _eval_runtime import INSTRUCTIONS, EvaluationController, InstrumentedAgent
 from livekit.agents import (
-    Agent,
     AgentServer,
     AgentSession,
     InterruptionOptions,
@@ -17,6 +17,7 @@ from livekit.agents import (
     inference,
     metrics,
 )
+from livekit.agents.voice.agent_session import SessionConnectOptions
 
 from livekit.plugins import silero, stepfun
 
@@ -55,10 +56,32 @@ _USE_LOCAL_VAD = not _USE_STREAMING_ASR or get_bool("STEPFUN_LOCAL_VAD", True)
 # stepaudio-2.5-asr-stream, so override deliberately and check the transcript.
 _ASR_MODEL = get("STEPFUN_ASR_MODEL", "stepaudio-2.5-asr-stream")
 _BATCH_ASR_MODEL = get("STEPFUN_BATCH_ASR_MODEL", "stepaudio-3-asr-max")
+_EVAL_PORT = get("STEPFUN_EVAL_PORT")
+if _EVAL_PORT is not None and not 1 <= int(_EVAL_PORT) <= 65535:
+    raise ValueError("STEPFUN_EVAL_PORT must be between 1 and 65535")
+_PREWARM = get_bool("STEPFUN_PREWARM", True)
+_VAD_SILENCE_MS = int(get("STEPFUN_VAD_SILENCE_DURATION_MS", "800"))
+if _VAD_SILENCE_MS <= 0:
+    raise ValueError("STEPFUN_VAD_SILENCE_DURATION_MS must be positive")
 
 _INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2"))
 if not 0.05 <= _INTERRUPTION_DURATION <= 5.0:
     raise ValueError("STEPFUN_MIN_INTERRUPTION_DURATION must be between 0.05 and 5 seconds")
+
+# The SDK closes the whole session once unrecoverable errors from stt, llm or
+# tts exceed this count. A provider blip — one dropped TTS websocket, say —
+# must not end the call, so the example keeps a wide margin over the SDK
+# default of 3. Transient failures are retried inside the stream first; this
+# only bounds what survives that.
+_MAX_UNRECOVERABLE_ERRORS = int(get("STEPFUN_MAX_UNRECOVERABLE_ERRORS", "25"))
+if _MAX_UNRECOVERABLE_ERRORS < 1:
+    raise ValueError("STEPFUN_MAX_UNRECOVERABLE_ERRORS must be at least 1")
+
+# Failed evaluation trials are recorded, not fatal: the runner stops only
+# after this many in a row, which means the agent itself is broken.
+_EVAL_MAX_CONSECUTIVE_FAILURES = int(get("STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES", "3"))
+if not 1 <= _EVAL_MAX_CONSECUTIVE_FAILURES <= 100:
+    raise ValueError("STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES must be between 1 and 100")
 
 
 def turn_handling() -> TurnHandlingOptions:
@@ -80,13 +103,11 @@ def turn_handling() -> TurnHandlingOptions:
     )
 
 
-class Assistant(Agent):
-    def __init__(self) -> None:
+class Assistant(InstrumentedAgent):
+    def __init__(self, *, evaluation=None) -> None:
         super().__init__(
-            instructions=(
-                "You are a concise, friendly voice assistant. Keep answers "
-                "conversational and short enough to listen to."
-            )
+            instructions=INSTRUCTIONS,
+            evaluation=evaluation,
         )
 
 
@@ -125,6 +146,7 @@ async def entrypoint(ctx: JobContext) -> None:
         batch_model=_BATCH_ASR_MODEL,
         use_streaming=_USE_STREAMING_ASR,
         server_vad=True,
+        vad_silence_duration_ms=_VAD_SILENCE_MS,
     )
     tts = stepfun.TTS(
         model=_TTS_MODEL,
@@ -136,15 +158,22 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # Pays for DNS, TLS, the WebSocket upgrade and — for TTS — the session
     # handshake before the user says anything.
-    stt.prewarm()
-    tts.prewarm()
+    if _PREWARM:
+        stt.prewarm()
+        tts.prewarm()
+
+    chat = stepfun.LLM(
+        model=_LLM_MODEL,
+        **({"reasoning_effort": _REASONING_EFFORT} if _REASONING_EFFORT != "none" else {}),
+    )
 
     session = AgentSession(
         vad=ctx.proc.userdata["vad"] if _USE_LOCAL_VAD else None,
         stt=stt,
-        llm=stepfun.LLM(model=_LLM_MODEL, reasoning_effort=_REASONING_EFFORT),
+        llm=chat,
         tts=tts,
         turn_handling=turn_handling(),
+        conn_options=SessionConnectOptions(max_unrecoverable_errors=_MAX_UNRECOVERABLE_ERRORS),
     )
 
     # Where the latency numbers come from: ASR first partial and final, LLM
@@ -161,8 +190,43 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_log_usage)
 
+    evaluation = None
+    if _EVAL_PORT is not None:
+        evaluation = EvaluationController(
+            session,
+            providers={"stt": stt, "llm": chat, "tts": tts},
+            max_consecutive_failures=_EVAL_MAX_CONSECUTIVE_FAILURES,
+            config={
+                "cluster": stt._opts.cluster,
+                "language": _LANGUAGE,
+                "asr_transport": "websocket" if _USE_STREAMING_ASR else "http",
+                "asr_model": stt.model,
+                "batch_asr_model": _BATCH_ASR_MODEL,
+                "llm_model": chat.model,
+                "reasoning_effort": _REASONING_EFFORT,
+                "tts_model": tts.model,
+                "voice": _VOICE,
+                "local_vad": _USE_LOCAL_VAD,
+                "noise_cancellation": _NOISE_CANCELLATION,
+                "prewarm": _PREWARM,
+                "vad_silence_duration_ms": _VAD_SILENCE_MS,
+                "min_interruption_duration_s": _INTERRUPTION_DURATION,
+                "turn_detection": "stt" if _USE_STREAMING_ASR else "v1-mini",
+            },
+        )
+        ctx.add_shutdown_callback(evaluation.aclose)
+
     try:
-        await session.start(agent=Assistant(), room=ctx.room)
+        await session.start(agent=Assistant(evaluation=evaluation), room=ctx.room)
+        if evaluation is not None:
+            from _eval_audio import ObservedAudioOutput
+
+            if session.output.audio is None:
+                raise RuntimeError("Evaluation requires audio console mode; remove --text")
+            session.input.audio = evaluation.audio
+            session.output.audio = ObservedAudioOutput(
+                session.output.audio, get_record=lambda: evaluation.active
+            )
         # Replace input before the reader scheduled by start() can consume it.
         if denoiser is not None:
             if session.input.audio is not None:
@@ -170,7 +234,11 @@ async def entrypoint(ctx: JobContext) -> None:
                 session.input.audio = filtered_input
             else:
                 denoiser.close()  # text-only console mode
+        if evaluation is not None:
+            await evaluation.start(int(_EVAL_PORT))
     except BaseException:
+        if evaluation is not None:
+            await evaluation.aclose()
         await _close_denoiser()
         raise
 

@@ -150,6 +150,89 @@ async def test_handshake_rejects_close() -> None:
         await _await_connection_done(ws)  # type: ignore[arg-type]
 
 
+async def test_close_errors_report_the_websocket_close_code() -> None:
+    """The close code is the only evidence of *why* a socket died.
+
+    It is what lands in the evaluation record, so a server-side idle reap has
+    to be distinguishable from a protocol error after the fact.
+    """
+    ws = FakeWebSocket()
+    ws.queue_close(1006, "connection reset")
+
+    with pytest.raises(APIConnectionError) as excinfo:
+        await _await_connection_done(ws)  # type: ignore[arg-type]
+    assert "close_code=1006" in str(excinfo.value)
+    assert "connection reset" in str(excinfo.value)
+
+
+async def test_midstream_close_is_retryable_and_reports_the_code() -> None:
+    """A socket that dies mid-generation must stay retryable.
+
+    The framework retries a segment when no audio was pushed yet, and declines
+    when the user already heard some — both need the same retryable error, and
+    both need the close code to explain what happened.
+    """
+    t = stepfun.TTS()
+    ws = FakeWebSocket()
+    t._pool = FakePool(_Connection(ws=ws, session_id=_SESSION))  # type: ignore[assignment]
+    ws.queue_server_event(_CREATED)
+    ws.queue_server_event(_audio_delta())
+    ws.queue_close(1006, "connection reset")
+
+    stream = t.stream(conn_options=APIConnectOptions(max_retry=0))
+    stream.push_text("hello")
+    stream.end_input()
+
+    with pytest.raises(APIConnectionError) as excinfo:
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    assert excinfo.value.retryable is True
+    assert "close_code=1006" in str(excinfo.value)
+    assert "connection reset" in str(excinfo.value)
+
+
+async def test_stale_pooled_socket_is_replaced_before_use(monkeypatch) -> None:
+    """The server can drop an idle pooled socket before the pool retires it.
+
+    aiohttp only notices on receive, so using it blind would fail the whole
+    turn. Replacing it costs one reconnect and the reply still happens.
+    """
+    t = stepfun.TTS()
+    dead_ws, fresh_ws = FakeWebSocket(), FakeWebSocket()
+    dead_ws.closed = True  # what the server already did to it
+    dead = _Connection(ws=dead_ws, session_id=_SESSION)  # type: ignore[arg-type]
+    fresh = _Connection(ws=fresh_ws, session_id=_SESSION)  # type: ignore[arg-type]
+    pool = FakePool(dead)
+    t._pool = pool  # type: ignore[assignment]
+
+    connects: list[str | None] = []
+
+    async def _connect(timeout: float, *, model: str | None = None) -> _Connection:
+        connects.append(model)
+        return fresh
+
+    monkeypatch.setattr(t, "_connect_ws", _connect)
+    for event in (_CREATED, _audio_delta(), _AUDIO_DONE):
+        fresh_ws.queue_server_event(event)
+
+    stream = t.stream()
+    stream.push_text("hello")
+    stream.end_input()
+    frames = [frame async for frame in stream]
+    await stream.aclose()
+
+    assert frames, "no audio emitted after the reconnect"
+    assert fresh_ws.types_sent()[0] == "tts.create"
+    assert dead_ws.sent == [], "the dead socket was used anyway"
+    assert dead in pool.removed
+    assert dead_ws.closed
+    # The replacement is opened for the stream's model, not whatever the dead
+    # socket happened to be bound to.
+    assert connects == [t._opts.model]
+
+
 async def test_create_frame_uses_documented_field_names() -> None:
     t = stepfun.TTS(voice="lively-girl", speed=1.2, volume=0.8, language="en")
     ws, _ = await _drive(t, ["hello"], [_CREATED, _audio_delta(), _AUDIO_DONE])

@@ -18,6 +18,8 @@ def load_agent(monkeypatch):
     import _config
 
     monkeypatch.setattr(_config, "load_env", lambda: [])
+    monkeypatch.delenv("STEPFUN_EVAL_PORT", raising=False)
+    monkeypatch.setenv("STEPFUN_PREWARM", "true")
 
     def load(transport="websocket", local_vad="true", noise="off"):
         monkeypatch.setenv("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2")
@@ -69,7 +71,50 @@ async def test_entrypoint_configures_turns_before_session_creation(
     else:
         assert turn_detector == "stt"
     assert module.stepfun.STT.call_args.kwargs["use_streaming"] == (transport == "websocket")
+    # A single provider blip must not close the session: the SDK shuts the
+    # session down once unrecoverable errors exceed this count.
+    assert opts["conn_options"].max_unrecoverable_errors == 25
     session.start.assert_awaited_once()
+
+
+async def test_unrecoverable_error_tolerance_is_configurable(load_agent, monkeypatch):
+    """The example keeps the session alive through provider blips, and the
+    tolerance is tunable per deployment."""
+    session = MagicMock()
+    session.start = AsyncMock()
+    factory = MagicMock(return_value=session)
+    ctx = SimpleNamespace(
+        proc=SimpleNamespace(userdata={"vad": object()}),
+        room=object(),
+        add_shutdown_callback=MagicMock(),
+    )
+
+    async def tolerance_with(env: str | None) -> int:
+        if env is None:
+            monkeypatch.delenv("STEPFUN_MAX_UNRECOVERABLE_ERRORS", raising=False)
+        else:
+            monkeypatch.setenv("STEPFUN_MAX_UNRECOVERABLE_ERRORS", env)
+        module = load_agent()
+        for component in ("STT", "TTS", "LLM"):
+            monkeypatch.setattr(module.stepfun, component, MagicMock())
+        monkeypatch.setattr(module, "AgentSession", factory)
+        await module.entrypoint(ctx)
+        return factory.call_args.kwargs["conn_options"].max_unrecoverable_errors
+
+    assert await tolerance_with(None) == 25
+    assert await tolerance_with("5") == 5
+
+
+def test_invalid_error_tolerance_is_rejected(load_agent, monkeypatch):
+    monkeypatch.setenv("STEPFUN_MAX_UNRECOVERABLE_ERRORS", "0")
+    with pytest.raises(ValueError, match="STEPFUN_MAX_UNRECOVERABLE_ERRORS"):
+        load_agent()
+
+
+def test_invalid_eval_failure_limit_is_rejected(load_agent, monkeypatch):
+    monkeypatch.setenv("STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES", "0")
+    with pytest.raises(ValueError, match="STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES"):
+        load_agent()
 
 
 def test_invalid_transport_fails_instead_of_silently_using_streaming(load_agent):
@@ -155,3 +200,37 @@ def test_python_entrypoint_runs_the_same_server(load_agent, monkeypatch):
         run_name="__main__",
     )
     run_app.assert_called_once_with(namespace["server"])
+
+
+async def test_eval_mode_replaces_microphone_and_keeps_console_output(load_agent, monkeypatch):
+    from _eval_audio import ObservedAudioOutput
+
+    from .test_eval_agent import DelayedOutput
+
+    monkeypatch.setenv("STEPFUN_EVAL_PORT", "8765")
+    module = load_agent()
+    for component in ("STT", "TTS", "LLM"):
+        monkeypatch.setattr(module.stepfun, component, MagicMock())
+    evaluation = SimpleNamespace(audio=object(), active=None, start=AsyncMock(), aclose=AsyncMock())
+    factory = MagicMock(return_value=evaluation)
+    monkeypatch.setattr(module, "EvaluationController", factory)
+    session = MagicMock()
+    session.start = AsyncMock()
+    session.output.audio = DelayedOutput()
+    monkeypatch.setattr(module, "AgentSession", MagicMock(return_value=session))
+    ctx = SimpleNamespace(
+        proc=SimpleNamespace(userdata={"vad": object()}),
+        room=object(),
+        add_shutdown_callback=MagicMock(),
+    )
+    await module.entrypoint(ctx)
+    evaluation.start.assert_awaited_once_with(8765)
+    assert session.input.audio is evaluation.audio
+    assert isinstance(session.output.audio, ObservedAudioOutput)
+    assert session.start.call_args.kwargs["agent"]._evaluation is evaluation
+
+
+def test_invalid_eval_port_is_rejected(load_agent, monkeypatch):
+    monkeypatch.setenv("STEPFUN_EVAL_PORT", "70000")
+    with pytest.raises(ValueError, match="STEPFUN_EVAL_PORT"):
+        load_agent()

@@ -375,6 +375,24 @@ class TTS(tts.TTS):
         return stream
 
 
+def _close_detail(msg: Any) -> str:
+    """Best-effort close code/reason suffix for a closed-socket error.
+
+    aiohttp carries the WebSocket close code in `extra` and the reason in
+    `data` for CLOSE/CLOSING/CLOSED frames. Both are routinely absent, so the
+    suffix only appears when the server actually told us why — which is the
+    difference between "the socket died" and a diagnosable failure.
+    """
+    parts: list[str] = []
+    code = getattr(msg, "extra", None)
+    if isinstance(code, int):
+        parts.append(f"close_code={code}")
+    reason = getattr(msg, "data", None)
+    if isinstance(reason, str) and reason:
+        parts.append(f"reason={reason!r}")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 async def _await_connection_done(ws: _WebSocket) -> str:
     """Read frames until the server issues the session id."""
     while True:
@@ -385,7 +403,9 @@ async def _await_connection_done(ws: _WebSocket) -> str:
             aiohttp.WSMsgType.CLOSE,
             aiohttp.WSMsgType.CLOSING,
         ):
-            raise APIConnectionError("stepfun tts: websocket closed during handshake")
+            raise APIConnectionError(
+                f"stepfun tts: websocket closed during handshake{_close_detail(msg)}"
+            )
 
         if msg.type == aiohttp.WSMsgType.ERROR:
             raise APIConnectionError(f"stepfun tts: websocket error: {msg.data}")
@@ -492,12 +512,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             try:
                 # A model update may happen after this stream snapshots its options.
                 if conn.model and conn.model != self._opts.model:
-                    self._tts._pool.remove(conn)
-                    await conn.ws.close()
-                    conn = await self._tts._connect_ws(
-                        self._conn_options.timeout, model=self._opts.model
+                    conn = await self._replace_connection(
+                        conn, reason="pooled model changed", model=self._opts.model
                     )
-                    self._connection_reused = False
+                elif conn.ws.closed:
+                    # The server can drop an idle socket before the pool's age
+                    # limit retires it, and aiohttp only notices on receive.
+                    # Swapping it here costs one reconnect instead of a failed
+                    # turn — and keeps the agent talking instead of dying.
+                    conn = await self._replace_connection(
+                        conn,
+                        model=self._opts.model,
+                        reason="pooled websocket was already closed",
+                    )
                 await self._create_session(conn)
 
                 output_emitter.start_segment(segment_id=conn.session_id)
@@ -517,6 +544,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await conn.ws.close()
                 self._tts._pool.remove(conn)
                 self._tts._pool.prewarm()
+
+    async def _replace_connection(
+        self, conn: _Connection, *, reason: str, model: str | None = None
+    ) -> _Connection:
+        """Swap a pooled socket that must not be used for this segment.
+
+        `remove()` before the rebind matters: the pool's context manager puts
+        the *original* connection back on exit, and a removed one is no longer
+        tracked, so a dead socket cannot sneak back into rotation.
+        """
+        logger.warning(
+            "stepfun tts: %s; reconnecting",
+            reason,
+            extra={"session_id": conn.session_id, "model": model or conn.model},
+        )
+        await conn.ws.close()
+        self._tts._pool.remove(conn)
+        fresh = await self._tts._connect_ws(self._conn_options.timeout, model=model)
+        self._connection_reused = False
+        return fresh
 
     async def _create_session(self, conn: _Connection) -> None:
         """Send tts.create and wait for the server to accept it.
@@ -563,7 +610,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 raise APIConnectionError(
-                    "stepfun tts: websocket closed before tts.response.created"
+                    f"stepfun tts: websocket closed before tts.response.created{_close_detail(msg)}"
                 )
 
             if msg.type == aiohttp.WSMsgType.ERROR:
@@ -624,7 +671,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
-                raise APIConnectionError("stepfun tts: websocket closed unexpectedly")
+                # Retryable: the framework re-runs the segment on a fresh
+                # connection when no audio had been pushed yet, and the close
+                # code is what tells the two cases apart in the logs.
+                raise APIConnectionError(
+                    f"stepfun tts: websocket closed unexpectedly{_close_detail(msg)}"
+                )
 
             if msg.type == aiohttp.WSMsgType.ERROR:
                 raise APIConnectionError(f"stepfun tts: websocket error: {msg.data}")

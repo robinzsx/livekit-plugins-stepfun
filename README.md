@@ -179,6 +179,8 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_LOCAL_VAD` | `true` | Local VAD; always enabled for batch ASR |
 | `STEPFUN_MIN_INTERRUPTION_DURATION` | `0.2` | Minimum detected speech, in seconds |
 | `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
+| `STEPFUN_MAX_UNRECOVERABLE_ERRORS` | `25` | Provider errors tolerated before the session closes |
+| `STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES` | `3` | Failed trials in a row that stop an evaluation run |
 
 Reasoning effort is documented for `step-3.7-flash`; other models log a warning.
 Reasoning happens before speakable content and can increase reply latency.
@@ -218,6 +220,33 @@ assess audio quality and pitch.
 Outside a LiveKit worker job, pass your own `aiohttp.ClientSession` to STT
 and TTS. The plugin leaves caller-supplied sessions open; call `aclose()` on
 the plugin instances before closing the HTTP session.
+
+## Evaluate an audio dataset
+
+Keep the console agent running with its local evaluation endpoint enabled:
+
+```bash
+STEPFUN_EVAL_PORT=8765 uv run python examples/voice_agent.py console
+# Or: STEPFUN_EVAL_PORT=8765 uv run lk agent console examples/voice_agent.py
+```
+
+In another terminal, replay your folder of WAVs:
+
+```bash
+uv run python examples/eval_agent.py run mono/ \
+  --label baseline --output eval_results/baseline
+```
+
+The runner sends one recording at real-time speed, waits for the entire reply
+to finish playback, then sends the next. It saves component and end-to-end
+timings, raw events, transcripts, CSV/JSON summaries, and an HTML report.
+Failed trials are recorded with their errors and the run continues; it stops
+after three failures in a row. Evaluation mode replaces the microphone; normal
+console behavior is retained when `STEPFUN_EVAL_PORT` is unset.
+
+See [the evaluation guide](examples/EVALUATION.md) for model comparisons,
+streaming versus batch ASR, repetitions, component benchmarks, and optional
+reference transcripts and speech-boundary annotations.
 
 ## Development and branches
 

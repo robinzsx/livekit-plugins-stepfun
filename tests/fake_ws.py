@@ -12,10 +12,10 @@ import aiohttp
 
 
 class FakeWSMessage:
-    def __init__(self, type_: aiohttp.WSMsgType, data: Any) -> None:
+    def __init__(self, type_: aiohttp.WSMsgType, data: Any, extra: Any = None) -> None:
         self.type = type_
         self.data = data
-        self.extra = None
+        self.extra = extra
 
 
 class FakeWebSocket:
@@ -49,8 +49,13 @@ class FakeWebSocket:
     def queue_binary(self, data: bytes) -> None:
         self._incoming.put_nowait(FakeWSMessage(aiohttp.WSMsgType.BINARY, data))
 
-    def queue_close(self) -> None:
-        self._incoming.put_nowait(FakeWSMessage(aiohttp.WSMsgType.CLOSED, None))
+    def queue_close(self, code: int | None = None, reason: str | None = None) -> None:
+        """Queue a close frame, optionally carrying the code and reason.
+
+        aiohttp puts the WebSocket close code in `extra` and the reason in
+        `data`, which is the only evidence of *why* a socket died.
+        """
+        self._incoming.put_nowait(FakeWSMessage(aiohttp.WSMsgType.CLOSED, reason, extra=code))
 
     def queue_error(self) -> None:
         self._incoming.put_nowait(

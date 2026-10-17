@@ -22,5 +22,11 @@ smoke_out/
 .pytest_cache/
 .ruff_cache/
 
-# Env
+# Env — secrets. .env.example is the committed template and must stay tracked.
 .env
+.env.*
+!.env.example
+
+# Local evaluation datasets and output
+/mono/
+/eval_results/
