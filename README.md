@@ -10,7 +10,7 @@ LiveKit `STT`, `TTS`, and `LLM` interfaces. Python 3.10+ and LiveKit Agents
 Install from this checkout to use this implementation:
 
 ```bash
-uv sync --extra examples --extra dev
+uv sync --extra examples
 cp .env.example .env
 ```
 
@@ -178,9 +178,7 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_TTS_VOICE` | `vibrant-youth` | Voice ID |
 | `STEPFUN_LOCAL_VAD` | `true` | Local VAD; always enabled for batch ASR |
 | `STEPFUN_MIN_INTERRUPTION_DURATION` | `0.2` | Minimum detected speech, in seconds |
-| `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
-| `STEPFUN_MAX_UNRECOVERABLE_ERRORS` | `25` | Provider errors tolerated before the session closes |
-| `STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES` | `3` | Failed trials in a row that stop an evaluation run |
+| `STEPFUN_PREWARM` | `true` | Warm connections before the caller speaks |
 | `LLM_PROVIDER` | `stepfun` | `stepfun`, `deepseek`, or `mix` |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | Chat model (`LLM_PROVIDER=deepseek`) |
 | `DEEPSEEK_API_KEY` | — | Required when DeepSeek is selectable |
@@ -213,93 +211,67 @@ multi-step exchange can switch mid-conversation; per-turn metrics record which
 model actually answered each turn.
 Reasoning happens before speakable content and can increase reply latency.
 
-The agent can apply local CPU noise suppression before audio reaches STT,
-VAD, and turn detection:
+## Build your own agent
 
-```bash
-STEPFUN_NOISE_CANCELLATION=webrtc uv run lk agent console examples/voice_agent.py
+Start from `examples/voice_agent.py`. It is a complete, working agent — the
+pieces worth changing first are:
+
+| Change | Where |
+| --- | --- |
+| Personality and task | `INSTRUCTIONS` at the top of `examples/voice_agent.py` |
+| Opening line | `AGENT_GREETING`; set it to `none` to wait for the caller to speak first |
+| Voice, language, models | `.env` |
+| Add a tool | a method on `Assistant` decorated with `@function_tool` |
+
+Tools are the usual reason to fork this: any `async def` on the `Assistant`
+class decorated with `@function_tool` becomes callable by the model, and its
+docstring is the description the model reads.
+
+```python
+from livekit.agents import RunContext, function_tool
+
+ORDERS = {"A123": "packed, ships tomorrow"}
+
+class Assistant(Agent):
+    @function_tool()
+    async def lookup_order(self, context: RunContext, order_id: str) -> str:
+        """Look up an order by ID and return its current status.
+
+        Call this whenever the caller asks about an order.
+        """
+        return ORDERS.get(order_id, "no such order")
 ```
 
-For RNNoise, install the optional native dependency:
+The docstring is the tool description the model reads, so say when to call it,
+not just what it does. Nothing else is needed: `AgentSession` discovers methods
+on the agent class, and the reply is spoken through the same TTS.
 
-```bash
-uv sync --extra examples --extra noise-cancellation
-STEPFUN_NOISE_CANCELLATION=rnnoise uv run lk agent console examples/voice_agent.py
-```
+Because `Assistant` subclasses `Agent`, `on_enter` and the node overrides work
+as documented in the [agents guide](https://docs.livekit.io/agents/build/).
 
-These filters reduce background noise; they do not configure echo cancellation.
+### Going past this example
 
-## Smoke test
+This example covers the single-agent case. For handoffs, multi-step flows,
+state that survives a model switch, and prompt design for speech, see the
+LiveKit docs rather than growing this file.
 
-This example makes live API calls and writes audio to `smoke_out/`:
-
-```bash
-uv run python examples/smoke_test.py
-uv run python examples/smoke_test.py --language zh --cluster china
-uv run python examples/smoke_test.py --llm-model step-3.7-flash,step-5-preview
-uv run python examples/smoke_test.py --help
-```
-
-It exercises HTTP and streaming TTS, streaming and batch STT, and chat/tool
-calling. Use `--llm-model none` to skip chat. CLI arguments override the example
-model, language, and voice settings. Listen to the generated WAV files to
-assess audio quality and pitch.
-
-Outside a LiveKit worker job, pass your own `aiohttp.ClientSession` to STT
-and TTS. The plugin leaves caller-supplied sessions open; call `aclose()` on
-the plugin instances before closing the HTTP session.
-
-## Evaluate an audio dataset
-
-Keep the console agent running with its local evaluation endpoint enabled:
-
-```bash
-STEPFUN_EVAL_PORT=8765 uv run python examples/voice_agent.py console
-# Or: STEPFUN_EVAL_PORT=8765 uv run lk agent console examples/voice_agent.py
-```
-
-In another terminal, replay your folder of WAVs:
-
-```bash
-uv run python examples/eval_agent.py run mono/ \
-  --label baseline --output eval_results/baseline
-```
-
-The runner sends one recording at real-time speed, waits for the entire reply
-to finish playback, then sends the next. It saves component and end-to-end
-timings, raw events, transcripts, CSV/JSON summaries, and an HTML report.
-Failed trials are recorded with their errors and the run continues; it stops
-after three failures in a row. Evaluation mode replaces the microphone; normal
-console behavior is retained when `STEPFUN_EVAL_PORT` is unset.
-
-See [the evaluation guide](examples/EVALUATION.md) for model comparisons,
-streaming versus batch ASR, repetitions, component benchmarks, and optional
-reference transcripts and speech-boundary annotations.
-
-## Development and branches
+## Development
 
 ```bash
 uv sync --extra dev --extra examples
 ./scripts/check.sh .venv
 ```
 
-The script runs lint, formatting, strict type checks, and offline tests.
-`./scripts/check.sh .venv1x .venv` checks multiple existing environments.
-Tests use scripted responses and require no provider credentials. Native
-RNNoise coverage runs only when its dependency is installed. Live API smoke
-tests are separate and manual.
+The script runs lint, formatting, strict type checks, and the offline unit
+tests. `./scripts/check.sh .venv1x .venv` checks multiple environments. The
+tests use scripted responses and need no provider credentials or network.
 
-- `main` contains the standalone package, all examples, configuration template,
-  and user documentation.
-- `add-stepfun-plugin` is based on `livekit/agents` upstream history. It adds the
-  plugin under `livekit-plugins/livekit-plugins-stepfun/` and provider unit tests
-  under `tests/stepfun/`, with a short plugin README. Its diff contains no
-  StepFun agent example, denoiser, or standalone application dependencies.
-
-The branches use different repository histories and layouts. Port shared
-plugin fixes by path; merge upstream LiveKit changes into the PR branch as
-needed. Submit that branch against `livekit/agents:main` after pushing it to
-a fork. See [CONTRIBUTING.md](CONTRIBUTING.md) for validation and contribution notes.
+This branch is the agent-oriented cut: the plugin, one runnable example, its
+configuration loader, and the plugin's unit tests. The evaluation harness,
+dataset replay, and smoke-test scripts live on `main`. The upstream PR lives on
+`add-stepfun-plugin`, which is based on `livekit/agents` history and tracks the
+plugin under `livekit-plugins/livekit-plugins-stepfun/`. Fixes to plugin
+behavior belong there first; these branches are not mergeable into each other.
 
 ## License
 

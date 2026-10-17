@@ -1,13 +1,26 @@
-"""A complete voice agent running entirely on StepFun models."""
+"""A complete voice agent running on StepFun models, ready to fork.
+
+This is the starting point: a working speech-to-speech agent you can edit in
+place. Everything provider-specific lives behind environment variables in
+`.env`, so swapping a model is a config change rather than a code change.
+
+    uv sync --extra examples
+    uv run lk agent console examples/voice_agent.py   # talk to it locally
+    uv run lk agent dev examples/voice_agent.py       # connect to a room
+
+The two commands differ only in transport: `console` uses your microphone and
+speakers in the terminal, `dev` joins a LiveKit room and needs LIVEKIT_URL,
+LIVEKIT_API_KEY and LIVEKIT_API_SECRET.
+"""
 
 from __future__ import annotations
 
 import logging
 
 from _config import get, get_bool, load_env
-from _eval_runtime import INSTRUCTIONS, EvaluationController, InstrumentedAgent
 from _llm_providers import build_llm, describe_llm
 from livekit.agents import (
+    Agent,
     AgentServer,
     AgentSession,
     InterruptionOptions,
@@ -18,7 +31,6 @@ from livekit.agents import (
     inference,
     metrics,
 )
-from livekit.agents.voice.agent_session import SessionConnectOptions
 
 from livekit.plugins import silero, stepfun
 
@@ -28,8 +40,22 @@ load_env()
 
 logger = logging.getLogger("stepfun-voice-agent")
 
-# stepfun | deepseek | mix. Per-provider model IDs are read by the provider
-# module (STEPFUN_LLM_MODEL, DEEPSEEK_MODEL), not here.
+# Change this prompt first: it is the whole personality of the agent.
+INSTRUCTIONS = (
+    "You are a concise, friendly voice assistant. Keep answers conversational "
+    "and short enough to listen to."
+)
+
+# What is said when the caller connects and says nothing. `none` waits for
+# them to speak first, which is usually better for an inbound call. Written
+# this way because `get()` treats an empty value as unset, so "" would silently
+# fall back to the default greeting.
+_GREETING = get("AGENT_GREETING", "Hi! How can I help you today?")
+GREETING = None if (_GREETING or "").strip().lower() in ("none", "off") else _GREETING
+
+# -- chat model --------------------------------------------------------------
+# stepfun | deepseek | mix. Model IDs are read by _llm_providers, which owns
+# STEPFUN_LLM_MODEL and DEEPSEEK_MODEL.
 _LLM_PROVIDER = (get("LLM_PROVIDER", "stepfun") or "stepfun").strip().lower()
 if _LLM_PROVIDER not in ("stepfun", "deepseek", "mix"):
     raise ValueError("LLM_PROVIDER must be 'stepfun', 'deepseek' or 'mix'")
@@ -38,33 +64,28 @@ if _LLM_PROVIDER not in ("stepfun", "deepseek", "mix"):
 # silence before the reply starts.
 _REASONING_EFFORT = get("STEPFUN_REASONING_EFFORT", "low")
 
+# -- speech ------------------------------------------------------------------
 # Language is worth being explicit about: omitting it selects English
 # server-side on both the ASR and the TTS, on both clusters.
 _LANGUAGE = get("STEPFUN_LANGUAGE", "en")
 
-_VOICE = get("STEPFUN_TTS_VOICE", "vibrant-youth")
+# global (api.stepfun.ai) or china (api.stepfun.com). Credentials are
+# cluster-specific: a key from one will not authenticate against the other.
+_STT_MODEL = get("STEPFUN_ASR_MODEL", "stepaudio-2.5-asr-stream")
+_BATCH_ASR_MODEL = get("STEPFUN_BATCH_ASR_MODEL", "stepaudio-3-asr-max")
 _TTS_MODEL = get("STEPFUN_TTS_MODEL", "stepaudio-3-tts")
+_VOICE = get("STEPFUN_TTS_VOICE", "vibrant-youth")
 
-_NOISE_CANCELLATION = get("STEPFUN_NOISE_CANCELLATION", "off")
-if _NOISE_CANCELLATION not in ("off", "rnnoise", "webrtc"):
-    raise ValueError("STEPFUN_NOISE_CANCELLATION must be 'off', 'rnnoise' or 'webrtc'")
-
+# websocket streams interim transcripts as the caller speaks; http waits for
+# the whole utterance and needs local VAD to find its boundaries.
 _USE_STREAMING_ASR = get("STEPFUN_ASR_TRANSPORT", "websocket") != "http"
 if get("STEPFUN_ASR_TRANSPORT", "websocket") not in ("websocket", "http"):
     raise ValueError("STEPFUN_ASR_TRANSPORT must be 'websocket' or 'http'")
 
-# Local VAD improves interruption latency but never owns streaming endpointing.
-# Batch recognition always needs it to produce audio segments.
+# Local VAD also makes interruptions feel instant; it never owns endpointing
+# while streaming, where the server decides when a turn has ended.
 _USE_LOCAL_VAD = not _USE_STREAMING_ASR or get_bool("STEPFUN_LOCAL_VAD", True)
 
-# Streaming ASR model. The endpoint has historically accepted only
-# stepaudio-2.5-asr-stream, so override deliberately and check the transcript.
-_ASR_MODEL = get("STEPFUN_ASR_MODEL", "stepaudio-2.5-asr-stream")
-_BATCH_ASR_MODEL = get("STEPFUN_BATCH_ASR_MODEL", "stepaudio-3-asr-max")
-_EVAL_PORT = get("STEPFUN_EVAL_PORT")
-if _EVAL_PORT is not None and not 1 <= int(_EVAL_PORT) <= 65535:
-    raise ValueError("STEPFUN_EVAL_PORT must be between 1 and 65535")
-_PREWARM = get_bool("STEPFUN_PREWARM", True)
 _VAD_SILENCE_MS = int(get("STEPFUN_VAD_SILENCE_DURATION_MS", "800"))
 if _VAD_SILENCE_MS <= 0:
     raise ValueError("STEPFUN_VAD_SILENCE_DURATION_MS must be positive")
@@ -73,23 +94,27 @@ _INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2"))
 if not 0.05 <= _INTERRUPTION_DURATION <= 5.0:
     raise ValueError("STEPFUN_MIN_INTERRUPTION_DURATION must be between 0.05 and 5 seconds")
 
-# The SDK closes the whole session once unrecoverable errors from stt, llm or
-# tts exceed this count. A provider blip — one dropped TTS websocket, say —
-# must not end the call, so the example keeps a wide margin over the SDK
-# default of 3. Transient failures are retried inside the stream first; this
-# only bounds what survives that.
-_MAX_UNRECOVERABLE_ERRORS = int(get("STEPFUN_MAX_UNRECOVERABLE_ERRORS", "25"))
-if _MAX_UNRECOVERABLE_ERRORS < 1:
-    raise ValueError("STEPFUN_MAX_UNRECOVERABLE_ERRORS must be at least 1")
+# Pays for DNS, TLS, the WebSocket upgrade and — for TTS — the session
+# handshake before the user says anything. Set false to compare startup cost.
+_PREWARM = get_bool("STEPFUN_PREWARM", True)
 
-# Failed evaluation trials are recorded, not fatal: the runner stops only
-# after this many in a row, which means the agent itself is broken.
-_EVAL_MAX_CONSECUTIVE_FAILURES = int(get("STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES", "3"))
-if not 1 <= _EVAL_MAX_CONSECUTIVE_FAILURES <= 100:
-    raise ValueError("STEPFUN_EVAL_MAX_CONSECUTIVE_FAILURES must be between 1 and 100")
+
+class Assistant(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions=INSTRUCTIONS)
+
+    async def on_enter(self) -> None:
+        if GREETING:
+            self.session.generate_reply(instructions=f"Greet the caller: {GREETING}")
 
 
 def turn_handling() -> TurnHandlingOptions:
+    """How the session decides the caller has finished a turn.
+
+    With streaming ASR the server's endpointing is authoritative, which is why
+    it is preferred; batch ASR has no such signal, so a turn detector supplies
+    one locally.
+    """
     interruption: InterruptionOptions = {
         "mode": "vad",
         "min_duration": _INTERRUPTION_DURATION,
@@ -108,48 +133,24 @@ def turn_handling() -> TurnHandlingOptions:
     )
 
 
-class Assistant(InstrumentedAgent):
-    def __init__(self, *, evaluation=None) -> None:
-        super().__init__(
-            instructions=INSTRUCTIONS,
-            evaluation=evaluation,
-        )
-
-
 def prewarm(proc: JobProcess) -> None:
-    """Load local VAD weights before the first session."""
+    """Load local VAD weights before the first session.
+
+    Weights are ~2MB from disk; loading them per-call adds silence to the
+    caller's first sentence.
+    """
     if _USE_LOCAL_VAD:
         proc.userdata["vad"] = silero.VAD.load()
 
 
 async def entrypoint(ctx: JobContext) -> None:
-    logger.info(
-        "audio input: transport=%s local_vad=%s noise=%s interruption_min_duration=%.2fs",
-        "websocket" if _USE_STREAMING_ASR else "http",
-        _USE_LOCAL_VAD,
-        _NOISE_CANCELLATION,
-        _INTERRUPTION_DURATION,
-    )
-    # Per-session native state: never share a denoiser across callers.
-    from _noise_cancellation import FilteredAudioInput, NoiseSuppressor
-
-    denoiser = NoiseSuppressor(method=_NOISE_CANCELLATION) if _NOISE_CANCELLATION != "off" else None
-    filtered_input: FilteredAudioInput | None = None
-
-    async def _close_denoiser() -> None:
-        if filtered_input is not None:
-            await filtered_input.aclose()
-        elif denoiser is not None:
-            denoiser.close()
-
-    if denoiser is not None:
-        ctx.add_shutdown_callback(_close_denoiser)
-
     stt = stepfun.STT(
         language=_LANGUAGE,
-        model=_ASR_MODEL,
+        model=_STT_MODEL,
         batch_model=_BATCH_ASR_MODEL,
         use_streaming=_USE_STREAMING_ASR,
+        # Server-side endpointing: the model decides when a sentence ended,
+        # which beats a fixed silence threshold.
         server_vad=True,
         vad_silence_duration_ms=_VAD_SILENCE_MS,
     )
@@ -157,26 +158,30 @@ async def entrypoint(ctx: JobContext) -> None:
         model=_TTS_MODEL,
         voice=_VOICE,
         language=_LANGUAGE,
-        # Only honoured by stepaudio-2.5-tts and stepaudio-3-tts.
+        # Performance direction. Only honoured by stepaudio-2.5-tts and
+        # stepaudio-3-tts; drop it for the other models.
         instruction="warm, professional, unhurried",
     )
+    chat = build_llm(reasoning_effort=_REASONING_EFFORT)
 
-    # Pays for DNS, TLS, the WebSocket upgrade and — for TTS — the session
-    # handshake before the user says anything.
+    # One line per session in the logs saying which model actually answered.
+    logger.info(
+        "llm=%s audio input: transport=%s local_vad=%s",
+        describe_llm(chat),
+        "websocket" if _USE_STREAMING_ASR else "http",
+        _USE_LOCAL_VAD,
+    )
+
     if _PREWARM:
         stt.prewarm()
         tts.prewarm()
 
-    chat = build_llm(reasoning_effort=_REASONING_EFFORT)
-
-    logger.info("llm: %s", describe_llm(chat))
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"] if _USE_LOCAL_VAD else None,
+        vad=ctx.proc.userdata.get("vad"),
         stt=stt,
         llm=chat,
         tts=tts,
         turn_handling=turn_handling(),
-        conn_options=SessionConnectOptions(max_unrecoverable_errors=_MAX_UNRECOVERABLE_ERRORS),
     )
 
     # Where the latency numbers come from: ASR first partial and final, LLM
@@ -193,57 +198,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_log_usage)
 
-    evaluation = None
-    if _EVAL_PORT is not None:
-        evaluation = EvaluationController(
-            session,
-            providers={"stt": stt, "llm": chat, "tts": tts},
-            max_consecutive_failures=_EVAL_MAX_CONSECUTIVE_FAILURES,
-            config={
-                "cluster": stt._opts.cluster,
-                "language": _LANGUAGE,
-                "asr_transport": "websocket" if _USE_STREAMING_ASR else "http",
-                "asr_model": stt.model,
-                "batch_asr_model": _BATCH_ASR_MODEL,
-                **describe_llm(chat),
-                "reasoning_effort": _REASONING_EFFORT,
-                "tts_model": tts.model,
-                "voice": _VOICE,
-                "local_vad": _USE_LOCAL_VAD,
-                "noise_cancellation": _NOISE_CANCELLATION,
-                "prewarm": _PREWARM,
-                "vad_silence_duration_ms": _VAD_SILENCE_MS,
-                "min_interruption_duration_s": _INTERRUPTION_DURATION,
-                "turn_detection": "stt" if _USE_STREAMING_ASR else "v1-mini",
-            },
-        )
-        ctx.add_shutdown_callback(evaluation.aclose)
-
-    try:
-        await session.start(agent=Assistant(evaluation=evaluation), room=ctx.room)
-        if evaluation is not None:
-            from _eval_audio import ObservedAudioOutput
-
-            if session.output.audio is None:
-                raise RuntimeError("Evaluation requires audio console mode; remove --text")
-            session.input.audio = evaluation.audio
-            session.output.audio = ObservedAudioOutput(
-                session.output.audio, get_record=lambda: evaluation.active
-            )
-        # Replace input before the reader scheduled by start() can consume it.
-        if denoiser is not None:
-            if session.input.audio is not None:
-                filtered_input = FilteredAudioInput(session.input.audio, processor=denoiser)
-                session.input.audio = filtered_input
-            else:
-                denoiser.close()  # text-only console mode
-        if evaluation is not None:
-            await evaluation.start(int(_EVAL_PORT))
-    except BaseException:
-        if evaluation is not None:
-            await evaluation.aclose()
-        await _close_denoiser()
-        raise
+    await session.start(agent=Assistant(), room=ctx.room)
 
 
 # The lk CLI imports this module and discovers this server without executing

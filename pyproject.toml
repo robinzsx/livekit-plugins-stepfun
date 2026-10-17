@@ -40,10 +40,6 @@ examples = [
     "livekit-plugins-openai>=1.8.6",
     "livekit-plugins-silero>=1.8.6",
 ]
-# Offline CPU denoising for the example's shared audio input.
-noise-cancellation = [
-    "pyrnnoise>=0.4.3,<0.5",
-]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
