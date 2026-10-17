@@ -135,3 +135,31 @@ def test_reasoning_effort_silent_on_documented_model(
     with caplog.at_level("WARNING", logger="livekit.plugins.stepfun"):
         stepfun.LLM(model="step-3.7-flash", reasoning_effort="low")
     assert "reasoning_effort" not in caplog.text
+
+
+@requires_openai
+@pytest.mark.parametrize("model", ["step-5-preview", "step-3.7-flash"])
+def test_reasoning_effort_reaches_the_request(model: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both models document the parameter, so it must be on the wire."""
+    from livekit.plugins.openai import LLM as OpenAILLM
+
+    captured: dict = {}
+    original = OpenAILLM.__init__
+
+    def spy(self, **kwargs):
+        captured.update(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(OpenAILLM, "__init__", spy)
+    stepfun.LLM(model=model, reasoning_effort="medium")
+    assert captured["reasoning_effort"] == "medium"
+
+
+@requires_openai
+def test_reasoning_effort_silent_on_step_5_preview(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Documented for step-5-preview; warning here would train users to ignore it.
+    with caplog.at_level("WARNING", logger="livekit.plugins.stepfun"):
+        stepfun.LLM(model="step-5-preview", reasoning_effort="high")
+    assert "reasoning_effort" not in caplog.text

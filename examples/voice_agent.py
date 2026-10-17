@@ -60,8 +60,9 @@ _LLM_PROVIDER = (get("LLM_PROVIDER", "stepfun") or "stepfun").strip().lower()
 if _LLM_PROVIDER not in ("stepfun", "deepseek"):
     raise ValueError("LLM_PROVIDER must be 'stepfun' or 'deepseek'")
 
-# low / medium / high. Documented for step-3.7-flash; lower effort means less
-# silence before the reply starts.
+# low / medium / high. Documented for step-5-preview and step-3.7-flash and
+# omitted for models that do not take it. Lower effort means less silence
+# before the reply starts; "none" leaves the model's default alone.
 _REASONING_EFFORT = get("STEPFUN_REASONING_EFFORT", "low")
 
 # -- speech ------------------------------------------------------------------

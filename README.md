@@ -173,7 +173,7 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_ASR_MODEL` | `stepaudio-2.5-asr-stream` | Streaming ASR |
 | `STEPFUN_BATCH_ASR_MODEL` | `stepaudio-3-asr-max` | Batch ASR |
 | `STEPFUN_LLM_MODEL` | `step-3.7-flash` | Chat model (`LLM_PROVIDER=stepfun`) |
-| `STEPFUN_REASONING_EFFORT` | `low` | `low`, `medium`, or `high` |
+| `STEPFUN_REASONING_EFFORT` | `low` | `low`, `medium`, `high`, or `none`; sent only to models that document it |
 | `STEPFUN_TTS_MODEL` | `stepaudio-3-tts` | Speech synthesis model |
 | `STEPFUN_TTS_VOICE` | `vibrant-youth` | Voice ID |
 | `STEPFUN_LOCAL_VAD` | `true` | Local VAD; always enabled for batch ASR |
@@ -181,7 +181,7 @@ See [.env.example](.env.example) for the complete template.
 | `STEPFUN_NOISE_CANCELLATION` | `off` | `off`, `webrtc`, or `rnnoise` |
 | `STEPFUN_PREWARM` | `true` | Warm connections before the caller speaks |
 | `LLM_PROVIDER` | `stepfun` | `stepfun` or `deepseek` |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | Chat model (`LLM_PROVIDER=deepseek`) |
+| `DEEPSEEK_MODEL` | `deepseek-v4.1-flash` | Chat model (`LLM_PROVIDER=deepseek`) |
 | `DEEPSEEK_API_KEY` | — | Required when DeepSeek is selectable |
 
 Reasoning effort is documented for `step-3.7-flash`; it is omitted for models that

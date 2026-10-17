@@ -109,6 +109,18 @@ def test_reasoning_effort_none_is_not_forwarded(monkeypatch):
     assert "reasoning_effort" not in calls[0]
 
 
+@pytest.mark.parametrize("model", ["step-5-preview", "step-3.7-flash"])
+def test_reasoning_effort_is_forwarded_for_every_model_that_documents_it(monkeypatch, model):
+    """Keep this in step with REASONING_EFFORT_LLM_MODELS in the plugin."""
+    from livekit.plugins import stepfun
+
+    calls: list[dict] = []
+    monkeypatch.setattr(stepfun, "LLM", lambda **kw: calls.append(kw) or FakeLLM("stepfun"))
+
+    providers._build_stepfun(model, "high")
+    assert calls[0]["reasoning_effort"] == "high"
+
+
 def test_reasoning_effort_is_forwarded_for_a_supported_model(monkeypatch):
     from livekit.plugins import stepfun
 
@@ -142,7 +154,7 @@ def test_deepseek_is_built_through_the_openai_compatible_client(monkeypatch):
     assert built.provider == "DeepSeek"
 
 
-def test_deepseek_defaults_to_deepseek_chat(monkeypatch):
+def test_deepseek_has_a_documented_default(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
 
@@ -152,7 +164,7 @@ def test_deepseek_defaults_to_deepseek_chat(monkeypatch):
     monkeypatch.setattr(openai.LLM, "with_deepseek", with_deepseek)
 
     providers.build_llm()
-    assert with_deepseek.call_args.kwargs["model"] == "deepseek-chat"
+    assert with_deepseek.call_args.kwargs["model"] == "deepseek-v4.1-flash"
 
 
 def test_deepseek_without_a_key_fails_loudly(monkeypatch):
@@ -178,7 +190,7 @@ def test_mix_is_no_longer_accepted(monkeypatch):
 
 
 def test_describe_llm_reports_one_provider():
-    assert providers.describe_llm(FakeLLM("deepseek-chat")) == {
+    assert providers.describe_llm(FakeLLM("deepseek-v4.1-flash")) == {
         "llm_provider": "deepseek",
-        "llm_model": "deepseek-chat",
+        "llm_model": "deepseek-v4.1-flash",
     }
