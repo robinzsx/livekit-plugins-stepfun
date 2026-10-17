@@ -147,7 +147,11 @@ def test_deepseek_is_built_through_the_openai_compatible_client(monkeypatch):
 
     built = providers.build_llm(reasoning_effort="low")
 
-    with_deepseek.assert_called_once_with(model="deepseek-reasoner", api_key="sk-deepseek")
+    with_deepseek.assert_called_once_with(
+        model="deepseek-reasoner",
+        api_key="sk-deepseek",
+        base_url="https://api.deepseek.com/v1",
+    )
     assert built.model == "deepseek-reasoner"
     # The OpenAI client would otherwise report `api.deepseek.com`, the endpoint
     # rather than the vendor.
@@ -165,6 +169,49 @@ def test_deepseek_has_a_documented_default(monkeypatch):
 
     providers.build_llm()
     assert with_deepseek.call_args.kwargs["model"] == "deepseek-v4.1-flash"
+
+
+def test_deepseek_base_url_defaults_to_the_public_endpoint(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
+
+    from livekit.plugins import openai
+
+    with_deepseek = MagicMock(return_value=FakeLLM("deepseek"))
+    monkeypatch.setattr(openai.LLM, "with_deepseek", with_deepseek)
+
+    providers.build_llm()
+    assert with_deepseek.call_args.kwargs["base_url"] == "https://api.deepseek.com/v1"
+
+
+def test_deepseek_base_url_is_overridable(monkeypatch):
+    """For a gateway, a proxy, or a model only exposed on a private host."""
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://gateway.internal/v1")
+
+    from livekit.plugins import openai
+
+    with_deepseek = MagicMock(return_value=FakeLLM("deepseek"))
+    monkeypatch.setattr(openai.LLM, "with_deepseek", with_deepseek)
+
+    providers.build_llm()
+    assert with_deepseek.call_args.kwargs["base_url"] == "https://gateway.internal/v1"
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        # A doubled /v1/v1 404s in a way that is annoying to diagnose.
+        ("https://gateway.internal/v1", "https://gateway.internal/v1"),
+        ("https://gateway.internal/v1/", "https://gateway.internal/v1"),
+        # The client wants the version in the base URL, not in each request path.
+        ("https://gateway.internal", "https://gateway.internal/v1"),
+        ("https://gateway.internal/", "https://gateway.internal/v1"),
+    ],
+)
+def test_base_url_gets_exactly_one_version_suffix(given, expected):
+    assert providers._openai_compat_base_url(given) == expected
 
 
 def test_deepseek_without_a_key_fails_loudly(monkeypatch):

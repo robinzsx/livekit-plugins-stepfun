@@ -1,0 +1,1175 @@
+{
+  "source": "/home/zhushuxiang/mono",
+  "trials": [
+    {
+      "audio": "/home/zhushuxiang/mono/asr22.wav",
+      "id": "asr22.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声57.wav",
+      "id": "asr女声57.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声17.wav",
+      "id": "ASR女声17.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr81.wav",
+      "id": "asr81.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr109.wav",
+      "id": "asr109.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr89.wav",
+      "id": "asr89.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr169.wav",
+      "id": "asr169.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr143.wav",
+      "id": "asr143.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声50.wav",
+      "id": "asr女声50.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr92.wav",
+      "id": "asr92.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr78.wav",
+      "id": "asr78.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声39.wav",
+      "id": "ASR女声39.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr176户外车噪音.wav",
+      "id": "asr176户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr173户外车噪音.wav",
+      "id": "asr173户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr91.wav",
+      "id": "asr91.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声88.wav",
+      "id": "asr女声88.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr19语聊.wav",
+      "id": "asr19语聊.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr175户外车噪音.wav",
+      "id": "asr175户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声80.wav",
+      "id": "asr女声80.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr174户外车噪音.wav",
+      "id": "asr174户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr98.wav",
+      "id": "asr98.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声10.wav",
+      "id": "ASR女声10.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr116.wav",
+      "id": "asr116.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr117.wav",
+      "id": "asr117.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声90.wav",
+      "id": "asr女声90.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr139.wav",
+      "id": "asr139.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr25.wav",
+      "id": "asr25.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr146.wav",
+      "id": "asr146.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声51.wav",
+      "id": "asr女声51.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr124.wav",
+      "id": "asr124.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声3.wav",
+      "id": "ASR女声3.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr49.wav",
+      "id": "asr49.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr166.wav",
+      "id": "asr166.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声2.wav",
+      "id": "ASR女声2.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr102.wav",
+      "id": "asr102.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr13.wav",
+      "id": "asr13.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声36.wav",
+      "id": "ASR女声36.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr62.wav",
+      "id": "asr62.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr39.wav",
+      "id": "asr39.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声18.wav",
+      "id": "ASR女声18.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声89.wav",
+      "id": "asr女声89.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声4.wav",
+      "id": "ASR女声4.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr10.wav",
+      "id": "asr10.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr101.wav",
+      "id": "asr101.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr50.wav",
+      "id": "asr50.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr147.wav",
+      "id": "asr147.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声12.wav",
+      "id": "ASR女声12.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr27.wav",
+      "id": "asr27.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr177户外车噪音.wav",
+      "id": "asr177户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声63.wav",
+      "id": "asr女声63.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声13.wav",
+      "id": "ASR女声13.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr35.wav",
+      "id": "asr35.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr162.wav",
+      "id": "asr162.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声11.wav",
+      "id": "ASR女声11.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声22.wav",
+      "id": "ASR女声22.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声83.wav",
+      "id": "asr女声83.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr79.wav",
+      "id": "asr79.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr60.wav",
+      "id": "asr60.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声64.wav",
+      "id": "asr女声64.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr94.wav",
+      "id": "asr94.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr64.wav",
+      "id": "asr64.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声71.wav",
+      "id": "asr女声71.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr152.wav",
+      "id": "asr152.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr53.wav",
+      "id": "asr53.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr77.wav",
+      "id": "asr77.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr138.wav",
+      "id": "asr138.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr140.wav",
+      "id": "asr140.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr104.wav",
+      "id": "asr104.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr167.wav",
+      "id": "asr167.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr69.wav",
+      "id": "asr69.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr130.wav",
+      "id": "asr130.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声7.wav",
+      "id": "ASR女声7.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声20.wav",
+      "id": "ASR女声20.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声84.wav",
+      "id": "asr女声84.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声81.wav",
+      "id": "asr女声81.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr122.wav",
+      "id": "asr122.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr23.wav",
+      "id": "asr23.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声0.wav",
+      "id": "ASR女声0.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声58.wav",
+      "id": "asr女声58.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr54.wav",
+      "id": "asr54.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr97.wav",
+      "id": "asr97.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声5.wav",
+      "id": "ASR女声5.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声61.wav",
+      "id": "asr女声61.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声54.wav",
+      "id": "asr女声54.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr144.wav",
+      "id": "asr144.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声43.wav",
+      "id": "ASR女声43.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr24.wav",
+      "id": "asr24.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr168.wav",
+      "id": "asr168.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr163.wav",
+      "id": "asr163.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声52.wav",
+      "id": "asr女声52.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr客服5.wav",
+      "id": "asr客服5.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声41.wav",
+      "id": "ASR女声41.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr88.wav",
+      "id": "asr88.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr70.wav",
+      "id": "asr70.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr161.wav",
+      "id": "asr161.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr105.wav",
+      "id": "asr105.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr76.wav",
+      "id": "asr76.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr43.wav",
+      "id": "asr43.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr137.wav",
+      "id": "asr137.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr33.wav",
+      "id": "asr33.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声47.wav",
+      "id": "asr女声47.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声67.wav",
+      "id": "asr女声67.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr语聊20.wav",
+      "id": "asr语聊20.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr37.wav",
+      "id": "asr37.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声26.wav",
+      "id": "ASR女声26.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr45.wav",
+      "id": "asr45.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声65.wav",
+      "id": "asr女声65.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr83.wav",
+      "id": "asr83.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声60.wav",
+      "id": "asr女声60.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr121.wav",
+      "id": "asr121.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr123.wav",
+      "id": "asr123.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr28.wav",
+      "id": "asr28.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr客服9.wav",
+      "id": "asr客服9.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr103.wav",
+      "id": "asr103.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr108.wav",
+      "id": "asr108.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr51.wav",
+      "id": "asr51.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声55.wav",
+      "id": "asr女声55.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr36.wav",
+      "id": "asr36.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr72.wav",
+      "id": "asr72.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr26.wav",
+      "id": "asr26.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr29.wav",
+      "id": "asr29.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr40.wav",
+      "id": "asr40.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr66.wav",
+      "id": "asr66.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr159.wav",
+      "id": "asr159.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr84.wav",
+      "id": "asr84.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr75.wav",
+      "id": "asr75.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声42.wav",
+      "id": "ASR女声42.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声45.wav",
+      "id": "ASR女声45.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声59.wav",
+      "id": "asr女声59.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr164.wav",
+      "id": "asr164.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr31.wav",
+      "id": "asr31.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr38.wav",
+      "id": "asr38.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声49.wav",
+      "id": "asr女声49.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr110.wav",
+      "id": "asr110.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声23.wav",
+      "id": "ASR女声23.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr59.wav",
+      "id": "asr59.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr165.wav",
+      "id": "asr165.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr142.wav",
+      "id": "asr142.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声74.wav",
+      "id": "asr女声74.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr73.wav",
+      "id": "asr73.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声21.wav",
+      "id": "ASR女声21.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr145.wav",
+      "id": "asr145.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声56.wav",
+      "id": "asr女声56.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr47.wav",
+      "id": "asr47.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr127.wav",
+      "id": "asr127.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr8.wav",
+      "id": "asr8.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr21.wav",
+      "id": "asr21.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr63.wav",
+      "id": "asr63.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr客服4.wav",
+      "id": "asr客服4.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr41.wav",
+      "id": "asr41.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr100.wav",
+      "id": "asr100.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声25.wav",
+      "id": "ASR女声25.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr126.wav",
+      "id": "asr126.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr11.wav",
+      "id": "asr11.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr153.wav",
+      "id": "asr153.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr158.wav",
+      "id": "asr158.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr.wav",
+      "id": "asr.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr156.wav",
+      "id": "asr156.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr1客服.wav",
+      "id": "asr1客服.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr99.wav",
+      "id": "asr99.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr93.wav",
+      "id": "asr93.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声34.wav",
+      "id": "ASR女声34.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声68.wav",
+      "id": "asr女声68.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr82.wav",
+      "id": "asr82.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr135.wav",
+      "id": "asr135.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr114.wav",
+      "id": "asr114.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr87.wav",
+      "id": "asr87.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声24.wav",
+      "id": "ASR女声24.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr106.wav",
+      "id": "asr106.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr52.wav",
+      "id": "asr52.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr155.wav",
+      "id": "asr155.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr65.wav",
+      "id": "asr65.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr67.wav",
+      "id": "asr67.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr136.wav",
+      "id": "asr136.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr46.wav",
+      "id": "asr46.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声29.wav",
+      "id": "ASR女声29.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr16.wav",
+      "id": "asr16.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声40.wav",
+      "id": "ASR女声40.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr42.wav",
+      "id": "asr42.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr2.wav",
+      "id": "asr2.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声19.wav",
+      "id": "ASR女声19.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr125.wav",
+      "id": "asr125.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声66.wav",
+      "id": "asr女声66.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr151.wav",
+      "id": "asr151.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr154.wav",
+      "id": "asr154.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声33.wav",
+      "id": "ASR女声33.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr160.wav",
+      "id": "asr160.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声70.wav",
+      "id": "asr女声70.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声85.wav",
+      "id": "asr女声85.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr148.wav",
+      "id": "asr148.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声69.wav",
+      "id": "asr女声69.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声8.wav",
+      "id": "ASR女声8.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声53.wav",
+      "id": "asr女声53.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr15.wav",
+      "id": "asr15.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声76.wav",
+      "id": "asr女声76.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr85.wav",
+      "id": "asr85.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声9.wav",
+      "id": "ASR女声9.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声48.wav",
+      "id": "asr女声48.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声1.wav",
+      "id": "ASR女声1.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr129.wav",
+      "id": "asr129.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr55.wav",
+      "id": "asr55.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr178户外车噪音.wav",
+      "id": "asr178户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr112.wav",
+      "id": "asr112.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr170.wav",
+      "id": "asr170.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr女声82.wav",
+      "id": "asr女声82.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr86.wav",
+      "id": "asr86.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr74.wav",
+      "id": "asr74.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr9.wav",
+      "id": "asr9.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr107.wav",
+      "id": "asr107.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr48.wav",
+      "id": "asr48.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr客服7.wav",
+      "id": "asr客服7.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr61.wav",
+      "id": "asr61.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr34.wav",
+      "id": "asr34.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr115.wav",
+      "id": "asr115.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr111.wav",
+      "id": "asr111.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声32.wav",
+      "id": "ASR女声32.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声15.wav",
+      "id": "ASR女声15.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声16.wav",
+      "id": "ASR女声16.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr171户外车噪音.wav",
+      "id": "asr171户外车噪音.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr56.wav",
+      "id": "asr56.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声30.wav",
+      "id": "ASR女声30.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr44.wav",
+      "id": "asr44.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr客服6.wav",
+      "id": "asr客服6.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr80.wav",
+      "id": "asr80.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声35.wav",
+      "id": "ASR女声35.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr95.wav",
+      "id": "asr95.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声44.wav",
+      "id": "ASR女声44.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr113.wav",
+      "id": "asr113.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr12.wav",
+      "id": "asr12.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr128.wav",
+      "id": "asr128.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr96.wav",
+      "id": "asr96.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声14.wav",
+      "id": "ASR女声14.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/ASR女声38.wav",
+      "id": "ASR女声38.wav",
+      "repetition": 1
+    },
+    {
+      "audio": "/home/zhushuxiang/mono/asr71.wav",
+      "id": "asr71.wav",
+      "repetition": 1
+    }
+  ]
+}

@@ -9,6 +9,14 @@ is made once per process:
 `build_llm()` returns a plain `llm.LLM`, so `AgentSession` and the evaluation
 harness need to know nothing about the switch.
 
+Endpoints are overridable per provider, for a gateway, a proxy, or a model only
+exposed on a private host:
+
+    DEEPSEEK_BASE_URL=https://my-gateway.internal/v1
+
+StepFun's own endpoint is chosen by STEPFUN_CLUSTER (global or china) and so
+has no separate URL setting here.
+
 Why no per-turn switching: alternating models inside one conversation makes a
 run harder to attribute — a transcript is no longer reproducible from a
 model name, and latency figures blend two providers. Change the env, restart a
@@ -29,6 +37,11 @@ from livekit.agents import llm
 
 DEFAULT_STEPFUN_MODEL = "step-3.7-flash"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4.1-flash"
+
+#: DeepSeek's public endpoint. `openai.LLM.with_deepseek` defaults to this, but
+#: it is named here so DEEPSEEK_BASE_URL has something to override and so the
+#: value appears in the eval config rather than only inside the OpenAI plugin.
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 #: Models whose API documents `reasoning_effort`.
 STEPFUN_REASONING_EFFORT_MODELS = frozenset({"step-5-preview", "step-3.7-flash"})
@@ -80,7 +93,19 @@ def _build_stepfun(model: str, reasoning_effort: str | None) -> llm.LLM:
     return stepfun.LLM(**kwargs)
 
 
-def _build_deepseek(model: str, api_key: str | None) -> llm.LLM:
+def _openai_compat_base_url(base_url: str) -> str:
+    """Append /v1 unless it is already there.
+
+    The OpenAI-compatible client expects the API version in the base URL rather
+    than in each request path. A doubled `/v1/v1` 404s in a way that is
+    annoying to diagnose, so an explicit URL that already carries it is left
+    alone. Same rule the plugin applies to StepFun's own base URL.
+    """
+    trimmed = base_url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
+
+
+def _build_deepseek(model: str, api_key: str | None, base_url: str | None = None) -> llm.LLM:
     # `with_deepseek` is a plain constructor on the OpenAI plugin: same protocol,
     # different base_url. No extra dependency beyond what the examples already
     # install.
@@ -92,7 +117,8 @@ def _build_deepseek(model: str, api_key: str | None) -> llm.LLM:
             "LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY.\n"
             "  Export it or add it to .env, then restart."
         )
-    return _DeepSeekLLM(openai.LLM.with_deepseek(model=model, api_key=key))
+    resolved = _openai_compat_base_url(base_url or DEFAULT_DEEPSEEK_BASE_URL)
+    return _DeepSeekLLM(openai.LLM.with_deepseek(model=model, api_key=key, base_url=resolved))
 
 
 def build_llm(*, reasoning_effort: str | None = None) -> llm.LLM:
@@ -109,7 +135,7 @@ def build_llm(*, reasoning_effort: str | None = None) -> llm.LLM:
 
     if provider == "deepseek":
         model = get("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL) or DEFAULT_DEEPSEEK_MODEL
-        return _build_deepseek(model, None)
+        return _build_deepseek(model, None, get("DEEPSEEK_BASE_URL"))
 
     raise ValueError(f"unknown LLM provider {provider!r}; expected one of {', '.join(PROVIDERS)}")
 
