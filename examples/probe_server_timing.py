@@ -46,12 +46,32 @@ load_env()
 
 # Standard OpenAI chat-completion streaming schema. Anything outside these sets
 # is StepFun-specific and is exactly what we are hunting for.
-_OPENAI_TOP = {"id", "object", "created", "model", "choices", "usage",
-               "system_fingerprint", "service_tier"}
-_OPENAI_USAGE = {"prompt_tokens", "completion_tokens", "total_tokens",
-                 "completion_tokens_details", "prompt_tokens_details"}
-_OPENAI_DELTA = {"role", "content", "reasoning_content", "reasoning",
-                 "tool_calls", "function_call", "refusal"}
+_OPENAI_TOP = {
+    "id",
+    "object",
+    "created",
+    "model",
+    "choices",
+    "usage",
+    "system_fingerprint",
+    "service_tier",
+}
+_OPENAI_USAGE = {
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "completion_tokens_details",
+    "prompt_tokens_details",
+}
+_OPENAI_DELTA = {
+    "role",
+    "content",
+    "reasoning_content",
+    "reasoning",
+    "tool_calls",
+    "function_call",
+    "refusal",
+}
 
 DEFAULT_TEXT = "List the numbers 1 through 40 separated by commas, then say done."
 
@@ -100,6 +120,7 @@ async def sse_json(resp: aiohttp.ClientResponse):
 
 # --- audio helpers ---------------------------------------------------------
 
+
 def extract_pcm_from_wav(data: bytes) -> tuple[bytes, int, int, int]:
     """Return (pcm_bytes, rate, channels, bits) by walking RIFF chunks."""
     if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
@@ -107,14 +128,16 @@ def extract_pcm_from_wav(data: bytes) -> tuple[bytes, int, int, int]:
     fmt = pcm = None
     off, n = 12, len(data)
     while off + 8 <= n:
-        cid = data[off:off + 4]
-        size = int.from_bytes(data[off + 4:off + 8], "little")
-        body = data[off + 8:off + 8 + size]
+        cid = data[off : off + 4]
+        size = int.from_bytes(data[off + 4 : off + 8], "little")
+        body = data[off + 8 : off + 8 + size]
         if cid == b"fmt ":
-            fmt = (int.from_bytes(body[0:2], "little"),   # audio format
-                   int.from_bytes(body[2:4], "little"),   # channels
-                   int.from_bytes(body[4:8], "little"),   # rate
-                   int.from_bytes(body[14:16], "little"))  # bits
+            fmt = (
+                int.from_bytes(body[0:2], "little"),  # audio format
+                int.from_bytes(body[2:4], "little"),  # channels
+                int.from_bytes(body[4:8], "little"),  # rate
+                int.from_bytes(body[14:16], "little"),
+            )  # bits
         elif cid == b"data":
             pcm = body
         off += 8 + size + (size & 1)
@@ -128,12 +151,15 @@ def downmix_mono16(pcm: bytes, channels: int) -> bytes:
         return pcm
     a = array("h")
     a.frombytes(pcm[: len(pcm) // 2 * 2])
-    out = array("h", [sum(a[i:i + channels]) // channels
-                      for i in range(0, len(a) - channels + 1, channels)])
+    out = array(
+        "h",
+        [sum(a[i : i + channels]) // channels for i in range(0, len(a) - channels + 1, channels)],
+    )
     return out.tobytes()
 
 
 # --- LLM -------------------------------------------------------------------
+
 
 async def probe_llm(session: aiohttp.ClientSession, args) -> None:
     hdr(f"LLM  ({args.llm_model})  raw streaming chat-completions")
@@ -158,10 +184,12 @@ async def probe_llm(session: aiohttp.ClientSession, args) -> None:
 
     async def run(payload: dict[str, Any]) -> None:
         nonlocal t_first, t_last, usage, n_chunks, text, first_content_chunk, extra_seen
-        async with session.post(url, json=payload, headers=headers,
-                                timeout=aiohttp.ClientTimeout(total=args.timeout)) as resp:
-            print(f"{stamp(t0)} HTTP {resp.status}  "
-                  f"content-type={resp.headers.get('content-type')}")
+        async with session.post(
+            url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=args.timeout)
+        ) as resp:
+            print(
+                f"{stamp(t0)} HTTP {resp.status}  content-type={resp.headers.get('content-type')}"
+            )
             if resp.status >= 400:
                 print("  error body:", (await resp.text())[:500])
                 resp.raise_for_status()
@@ -188,8 +216,10 @@ async def probe_llm(session: aiohttp.ClientSession, args) -> None:
                     uextra = set(usage) - _OPENAI_USAGE
                     if uextra:
                         extra_seen |= {f"usage:{k}" for k in uextra}
-                print(f"{stamp(t0)} #{n_chunks:3d} content={len(content):3d} "
-                      f"finish={finish} extra={sorted(extra | dextra) or '-'}")
+                print(
+                    f"{stamp(t0)} #{n_chunks:3d} content={len(content):3d} "
+                    f"finish={finish} extra={sorted(extra | dextra) or '-'}"
+                )
 
     try:
         await run(body)
@@ -214,8 +244,10 @@ async def probe_llm(session: aiohttp.ClientSession, args) -> None:
     if span_ms is not None:
         print(f"  generation span (first -> last content): {span_ms:.0f} ms")
     if otps:
-        print(f"  completion_tokens={completion}  =>  OTPS = {otps:.1f} tok/s "
-              f"(client-side; network-independent)")
+        print(
+            f"  completion_tokens={completion}  =>  OTPS = {otps:.1f} tok/s "
+            f"(client-side; network-independent)"
+        )
     if usage:
         print("  usage chunk (raw):")
         print("   ", json.dumps(usage, ensure_ascii=False))
@@ -228,11 +260,14 @@ async def probe_llm(session: aiohttp.ClientSession, args) -> None:
         print("      ^ candidate server-side timing; compare against client TTFT above.")
     else:
         print("  server-side timing fields: NONE (standard OpenAI schema only)")
-        print("  => client TTFT already includes network; "
-              "no server split available from this endpoint.")
+        print(
+            "  => client TTFT already includes network; "
+            "no server split available from this endpoint."
+        )
 
 
 # --- TTS -------------------------------------------------------------------
+
 
 async def probe_tts(session: aiohttp.ClientSession, args) -> None:
     hdr(f"TTS  ({args.tts_model} / {args.voice})  raw streaming WebSocket")
@@ -241,8 +276,11 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
     t0 = time.perf_counter()
     extra_seen: set[str] = set()
 
-    async with session.ws_connect(url, headers=_utils.auth_headers(args.api_key),
-                                  timeout=aiohttp.ClientTimeout(total=args.timeout)) as ws:
+    async with session.ws_connect(
+        url,
+        headers=_utils.auth_headers(args.api_key),
+        timeout=aiohttp.ClientTimeout(total=args.timeout),
+    ) as ws:
         # handshake: wait for tts.connection.done -> session_id
         session_id = None
         while session_id is None:
@@ -252,10 +290,23 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
                 session_id = (ev.get("data") or {}).get("session_id")
                 print("   ", pretty(ev))
         # ask for word-level subtitles: these carry SERVER-side audio timings
-        await ws.send_str(json.dumps({"type": "tts.create", "data": {
-            "session_id": session_id, "voice_id": args.voice, "response_format": "pcm",
-            "sample_rate": 24000, "speed_ratio": 1.0, "volume_ratio": 1.0,
-            "mode": "default", "timestamp": True}}))
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "tts.create",
+                    "data": {
+                        "session_id": session_id,
+                        "voice_id": args.voice,
+                        "response_format": "pcm",
+                        "sample_rate": 24000,
+                        "speed_ratio": 1.0,
+                        "volume_ratio": 1.0,
+                        "mode": "default",
+                        "timestamp": True,
+                    },
+                }
+            )
+        )
         t_create = time.perf_counter()
         # wait for tts.response.created
         ts_created = None
@@ -269,8 +320,11 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
                 print("   ", pretty(ev))
                 return
         # push text, then done
-        await ws.send_str(json.dumps({"type": "tts.text.delta",
-                                      "data": {"session_id": session_id, "text": args.text}}))
+        await ws.send_str(
+            json.dumps(
+                {"type": "tts.text.delta", "data": {"session_id": session_id, "text": args.text}}
+            )
+        )
         await ws.send_str(json.dumps({"type": "tts.text.done", "data": {"session_id": session_id}}))
 
         t_first_audio = None
@@ -290,9 +344,19 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
                 extra_top = set(ev) - {"type", "event_id", "timestamp", "data"}
                 if extra_top:
                     extra_seen |= {f"top:{k}" for k in extra_top}
-                extra = set(data) - {"session_id", "audio", "items", "request_id", "text",
-                                     "start_time", "end_time", "index", "duration", "status",
-                                     "timestamp"}
+                extra = set(data) - {
+                    "session_id",
+                    "audio",
+                    "items",
+                    "request_id",
+                    "text",
+                    "start_time",
+                    "end_time",
+                    "index",
+                    "duration",
+                    "status",
+                    "timestamp",
+                }
                 if extra:
                     extra_seen |= {f"data:{k}" for k in extra}
                 if etype == "tts.response.audio.delta" and data.get("audio"):
@@ -303,8 +367,12 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
                     audio_bytes += len(_utils.b64_to_pcm(data["audio"]))
                 if etype == "tts.response.audio.done":
                     ts_done = ev.get("timestamp")
-                if etype in ("tts.response.subtitle", "tts.response.sentence.start",
-                             "tts.response.sentence.end", "tts.response.audio.done"):
+                if etype in (
+                    "tts.response.subtitle",
+                    "tts.response.sentence.start",
+                    "tts.response.sentence.end",
+                    "tts.response.audio.done",
+                ):
                     print(f"{stamp(t0)} <= {etype}")
                     print("   ", pretty(ev))
                 if etype == "tts.response.audio.done":
@@ -319,26 +387,36 @@ async def probe_tts(session: aiohttp.ClientSession, args) -> None:
     else:
         print("  no audio")
     if ts_created and ts_first_audio:
-        print(f"  SERVER synthesis (response.created -> first audio, server clock): "
-              f"{ts_first_audio - ts_created} ms   <-- network-free server TTFA")
+        print(
+            f"  SERVER synthesis (response.created -> first audio, server clock): "
+            f"{ts_first_audio - ts_created} ms   <-- network-free server TTFA"
+        )
     if ts_created and ts_done:
-        print(f"  SERVER total (response.created -> audio.done, server clock): "
-              f"{ts_done - ts_created} ms")
+        print(
+            f"  SERVER total (response.created -> audio.done, server clock): "
+            f"{ts_done - ts_created} ms"
+        )
     if ts_first_audio:
-        print(f"  first-audio server timestamp: {ts_first_audio} (epoch ms); "
-              f"client wall now ~{time.time() * 1000:.0f}")
+        print(
+            f"  first-audio server timestamp: {ts_first_audio} (epoch ms); "
+            f"client wall now ~{time.time() * 1000:.0f}"
+        )
         print("  => one-way network ~ client_recv_ms - server_ts (needs clock alignment)")
-    print(f"  audio frames={n_audio}  pcm bytes={audio_bytes}  "
-          f"(~{audio_bytes / 2 / 24000:.2f}s @24k)")
+    print(
+        f"  audio frames={n_audio}  pcm bytes={audio_bytes}  (~{audio_bytes / 2 / 24000:.2f}s @24k)"
+    )
     print("  subtitle events carry SERVER-side word start/end times (ms into the audio).")
     if extra_seen:
         print(f"  >>> other NON-STANDARD fields: {sorted(extra_seen)}")
     else:
-        print("  timing source: per-event top-level `timestamp` (server epoch ms) "
-              "+ subtitle word times.")
+        print(
+            "  timing source: per-event top-level `timestamp` (server epoch ms) "
+            "+ subtitle word times."
+        )
 
 
 # --- STT audio source ------------------------------------------------------
+
 
 async def get_stt_audio(session, args) -> tuple[bytes, int, int, int] | None:
     if args.wav:
@@ -349,12 +427,23 @@ async def get_stt_audio(session, args) -> tuple[bytes, int, int, int] | None:
     # synthesize a short clip via the one-shot TTS HTTP route at 16 kHz mono,
     # so STT runs with no external file (mirrors smoke_test.py).
     print("  no --wav given; synthesizing a 16 kHz clip via TTS HTTP for STT input...")
-    payload = {"model": args.tts_model, "voice": args.voice, "input": args.text,
-               "response_format": "wav", "sample_rate": 16000, "speed": 1.0,
-               "volume": 1.0, "text_normalization": "standard"}
+    payload = {
+        "model": args.tts_model,
+        "voice": args.voice,
+        "input": args.text,
+        "response_format": "wav",
+        "sample_rate": 16000,
+        "speed": 1.0,
+        "volume": 1.0,
+        "text_normalization": "standard",
+    }
     url = f"{_utils.resolve_http_base_url(None, args.cluster)}{TTS_SYNTHESIZE_PATH}"
-    async with session.post(url, json=payload, headers=_utils.auth_headers(args.api_key),
-                            timeout=aiohttp.ClientTimeout(total=args.timeout)) as resp:
+    async with session.post(
+        url,
+        json=payload,
+        headers=_utils.auth_headers(args.api_key),
+        timeout=aiohttp.ClientTimeout(total=args.timeout),
+    ) as resp:
         if resp.status >= 400:
             print("  TTS synthesize failed:", (await resp.text())[:300])
             return None
@@ -374,20 +463,42 @@ async def probe_stt_stream(session, args, audio) -> None:
     t0 = time.perf_counter()
     extra_seen: set[str] = set()
 
-    async with session.ws_connect(url, headers=_utils.auth_headers(args.api_key),
-                                  timeout=aiohttp.ClientTimeout(total=args.timeout)) as ws:
-        await ws.send_str(json.dumps({"event_id": _utils.event_id(), "type": "session.update",
-                                      "session": {"audio": {"input": {
-                                          "format": {"type": "pcm", "codec": PCM_CODEC,
-                                                     "rate": rate, "bits": PCM_BITS,
-                                                     "channel": NUM_CHANNELS},
-                                          "transcription": {"model": args.stt_model,
-                                                            "enable_itn": True, **(
-                                                                {"language": args.language}
-                                                                if args.language else {})},
-                                          "turn_detection": {"type": "server_vad",
-                                                             "silence_duration_ms": 800,
-                                                             "threshold": 0.6}}}}}))
+    async with session.ws_connect(
+        url,
+        headers=_utils.auth_headers(args.api_key),
+        timeout=aiohttp.ClientTimeout(total=args.timeout),
+    ) as ws:
+        await ws.send_str(
+            json.dumps(
+                {
+                    "event_id": _utils.event_id(),
+                    "type": "session.update",
+                    "session": {
+                        "audio": {
+                            "input": {
+                                "format": {
+                                    "type": "pcm",
+                                    "codec": PCM_CODEC,
+                                    "rate": rate,
+                                    "bits": PCM_BITS,
+                                    "channel": NUM_CHANNELS,
+                                },
+                                "transcription": {
+                                    "model": args.stt_model,
+                                    "enable_itn": True,
+                                    **({"language": args.language} if args.language else {}),
+                                },
+                                "turn_detection": {
+                                    "type": "server_vad",
+                                    "silence_duration_ms": 800,
+                                    "threshold": 0.6,
+                                },
+                            }
+                        }
+                    },
+                }
+            )
+        )
         # wait for session.updated
         while True:
             ev = json.loads((await ws.receive()).data)
@@ -403,17 +514,29 @@ async def probe_stt_stream(session, args, audio) -> None:
         async def feed():
             step = rate // 10 * 2  # 100 ms of mono 16-bit
             for i in range(0, len(pcm), step):
-                await ws.send_str(json.dumps({"event_id": _utils.event_id(),
-                                              "type": "input_audio_buffer.append",
-                                              "audio": _utils.pcm_to_b64(pcm[i:i + step])}))
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "event_id": _utils.event_id(),
+                            "type": "input_audio_buffer.append",
+                            "audio": _utils.pcm_to_b64(pcm[i : i + step]),
+                        }
+                    )
+                )
                 await asyncio.sleep(0.1)
             times["speech_end"] = time.perf_counter()
             # trailing silence so server VAD closes the utterance
             silence = b"\x00\x00" * (rate * 2)  # ~1s
             for i in range(0, len(silence), step):
-                await ws.send_str(json.dumps({"event_id": _utils.event_id(),
-                                              "type": "input_audio_buffer.append",
-                                              "audio": _utils.pcm_to_b64(silence[i:i + step])}))
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "event_id": _utils.event_id(),
+                            "type": "input_audio_buffer.append",
+                            "audio": _utils.pcm_to_b64(silence[i : i + step]),
+                        }
+                    )
+                )
                 await asyncio.sleep(0.1)
             times["feed_end"] = time.perf_counter()
 
@@ -427,9 +550,20 @@ async def probe_stt_stream(session, args, audio) -> None:
                     break
                 ev = json.loads(msg.data)
                 etype = ev.get("type")
-                extra = set(ev) - {"type", "event_id", "text", "transcript", "item_id",
-                                   "audio_start_ms", "audio_end_ms", "usage", "meta",
-                                   "words", "stash", "language"}
+                extra = set(ev) - {
+                    "type",
+                    "event_id",
+                    "text",
+                    "transcript",
+                    "item_id",
+                    "audio_start_ms",
+                    "audio_end_ms",
+                    "usage",
+                    "meta",
+                    "words",
+                    "stash",
+                    "language",
+                }
                 if extra:
                     extra_seen |= extra
                 if etype in ("conversation.item.input_audio_transcription.completed",):
@@ -437,9 +571,11 @@ async def probe_stt_stream(session, args, audio) -> None:
                     print(f"{stamp(t0)} <= {etype}")
                     print("   ", pretty(ev))
                     break
-                if etype in ("input_audio_buffer.speech_started",
-                            "input_audio_buffer.speech_stopped",
-                            "conversation.item.input_audio_transcription.delta"):
+                if etype in (
+                    "input_audio_buffer.speech_started",
+                    "input_audio_buffer.speech_stopped",
+                    "conversation.item.input_audio_transcription.delta",
+                ):
                     label = (ev.get("transcript") or ev.get("text") or "")[:60]
                     print(f"{stamp(t0)} <= {etype} {label!r}")
                 else:
@@ -466,19 +602,34 @@ async def probe_stt_batch(session, args, audio) -> None:
         print(f"  expected 16-bit PCM, got {bits}; aborting")
         return
     url = f"{_utils.resolve_http_base_url(None, args.cluster)}{STT_RECOGNIZE_PATH}"
-    headers = {**_utils.auth_headers(args.api_key), "Content-Type": "application/json",
-               "Accept": "text/event-stream"}
+    headers = {
+        **_utils.auth_headers(args.api_key),
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
     transcription = {"model": args.batch_model, "enable_itn": True}
     if args.language:
         transcription["language"] = args.language
-    payload = {"audio": {"data": _utils.pcm_to_b64(pcm),
-                         "input": {"transcription": transcription,
-                                   "format": {"type": "pcm", "codec": PCM_CODEC, "rate": rate,
-                                              "bits": PCM_BITS, "channel": NUM_CHANNELS}}}}
+    payload = {
+        "audio": {
+            "data": _utils.pcm_to_b64(pcm),
+            "input": {
+                "transcription": transcription,
+                "format": {
+                    "type": "pcm",
+                    "codec": PCM_CODEC,
+                    "rate": rate,
+                    "bits": PCM_BITS,
+                    "channel": NUM_CHANNELS,
+                },
+            },
+        }
+    }
     t0 = time.perf_counter()
     extra_seen: set[str] = set()
-    async with session.post(url, json=payload, headers=headers,
-                            timeout=aiohttp.ClientTimeout(total=args.timeout)) as resp:
+    async with session.post(
+        url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=args.timeout)
+    ) as resp:
         print(f"{stamp(t0)} HTTP {resp.status}")
         if resp.status >= 400:
             print("  error body:", (await resp.text())[:400])
@@ -500,11 +651,11 @@ async def probe_stt_batch(session, args, audio) -> None:
 
 
 async def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("--only", choices=["llm", "tts", "stt", "all"], default="all")
-    p.add_argument("--cluster", choices=["global", "china"],
-                   default=get("STEPFUN_CLUSTER"))
+    p.add_argument("--cluster", choices=["global", "china"], default=get("STEPFUN_CLUSTER"))
     p.add_argument("--language", default=get("STEPFUN_LANGUAGE", "en"))
     p.add_argument("--llm-model", default=get("STEPFUN_LLM_MODEL", "step-3.7-flash"))
     p.add_argument("--reasoning-effort", default=get("STEPFUN_REASONING_EFFORT", "low"))
@@ -513,12 +664,12 @@ async def main() -> None:
     p.add_argument("--stt-model", default=get("STEPFUN_ASR_MODEL", "stepaudio-2.5-asr-stream"))
     p.add_argument("--batch-model", default=get("STEPFUN_BATCH_ASR_MODEL", "stepaudio-3-asr-max"))
     p.add_argument("--text", default=DEFAULT_TEXT)
-    p.add_argument("--wav",
-                   help="16 kHz mono 16-bit PCM WAV to transcribe (else one is synthesized)")
+    p.add_argument(
+        "--wav", help="16 kHz mono 16-bit PCM WAV to transcribe (else one is synthesized)"
+    )
     p.add_argument("--timeout", type=float, default=30.0)
     args = p.parse_args()
-    args.api_key = require("STEPFUN_API_KEY",
-                           hint="ASR, TTS and LLM all use the same key.")
+    args.api_key = require("STEPFUN_API_KEY", hint="ASR, TTS and LLM all use the same key.")
 
     print(f"cluster={args.cluster}  key=...{args.api_key[-4:]}  timeout={args.timeout}s")
     async with aiohttp.ClientSession() as session:

@@ -21,11 +21,12 @@ def load_agent(monkeypatch):
     monkeypatch.delenv("STEPFUN_EVAL_PORT", raising=False)
     monkeypatch.setenv("STEPFUN_PREWARM", "true")
 
-    def load(transport="websocket", local_vad="true", noise="off"):
+    def load(transport="websocket", local_vad="true", noise="off", turn_detector="vad"):
         monkeypatch.setenv("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2")
         monkeypatch.setenv("STEPFUN_ASR_TRANSPORT", transport)
         monkeypatch.setenv("STEPFUN_LOCAL_VAD", local_vad)
         monkeypatch.setenv("STEPFUN_NOISE_CANCELLATION", noise)
+        monkeypatch.setenv("STEPFUN_TURN_DETECTOR_VERSION", turn_detector)
         path = Path(__file__).resolve().parents[1] / "examples" / "voice_agent.py"
         spec = importlib.util.spec_from_file_location("stepfun_voice_agent", path)
         module = importlib.util.module_from_spec(spec)
@@ -48,7 +49,7 @@ async def test_entrypoint_configures_turns_before_session_creation(
 ):
     module = load_agent(transport, local_vad)
     vad = object()
-    monkeypatch.setattr(module.silero.VAD, "load", lambda: vad)
+    monkeypatch.setattr(module.silero.VAD, "load", lambda **kwargs: vad)
     proc = SimpleNamespace(userdata={})
     module.prewarm(proc)
     assert ("vad" in proc.userdata) == needs_vad
@@ -62,12 +63,17 @@ async def test_entrypoint_configures_turns_before_session_creation(
     await module.entrypoint(ctx)
     opts = factory.call_args.kwargs
     assert opts["vad"] is (vad if needs_vad else None)
-    assert opts["turn_handling"]["interruption"]["resume_false_interruption"] is False
+    assert opts["turn_handling"]["interruption"]["resume_false_interruption"] is True
     assert opts["turn_handling"]["interruption"]["min_duration"] == 0.2
     assert opts["turn_handling"]["interruption"]["min_words"] == 0
+    assert opts["turn_handling"]["interruption"]["mode"] == "vad"
+    assert opts["turn_handling"]["interruption"]["false_interruption_timeout"] == 2.0
+    if transport == "http":
+        assert opts["turn_handling"]["endpointing"]["min_delay"] == 0.0
+        assert opts["turn_handling"]["endpointing"]["max_delay"] == 2.5
     turn_detector = opts["turn_handling"]["turn_detection"]
     if transport == "http":
-        assert turn_detector.model == "turn-detector-v1-mini"
+        assert turn_detector == "vad"  # pure-VAD default (no semantic EOT model)
     else:
         assert turn_detector == "stt"
     assert module.stepfun.STT.call_args.kwargs["use_streaming"] == (transport == "websocket")
@@ -75,6 +81,25 @@ async def test_entrypoint_configures_turns_before_session_creation(
     # session down once unrecoverable errors exceed this count.
     assert opts["conn_options"].max_unrecoverable_errors == 25
     session.start.assert_awaited_once()
+
+
+async def test_batch_can_opt_into_semantic_turn_detector(load_agent, monkeypatch):
+    """vad is the default (v1-mini does not confirm EOT on the corpus), but the
+    local mini detector stays selectable for a real-time A/B."""
+    module = load_agent(transport="http", local_vad="true", turn_detector="v1-mini")
+    monkeypatch.setattr(module.silero.VAD, "load", lambda **kwargs: object())
+    proc = SimpleNamespace(userdata={})
+    module.prewarm(proc)
+    for component in ("STT", "TTS", "LLM"):
+        monkeypatch.setattr(module.stepfun, component, MagicMock())
+    session = MagicMock()
+    session.start = AsyncMock()
+    factory = MagicMock(return_value=session)
+    monkeypatch.setattr(module, "AgentSession", factory)
+    ctx = SimpleNamespace(proc=proc, room=object(), add_shutdown_callback=MagicMock())
+    await module.entrypoint(ctx)
+    detector = factory.call_args.kwargs["turn_handling"]["turn_detection"]
+    assert detector.model == "turn-detector-v1-mini"
 
 
 async def test_unrecoverable_error_tolerance_is_configurable(load_agent, monkeypatch):

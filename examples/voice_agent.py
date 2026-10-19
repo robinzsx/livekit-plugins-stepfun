@@ -70,9 +70,73 @@ _VAD_SILENCE_MS = int(get("STEPFUN_VAD_SILENCE_DURATION_MS", "800"))
 if _VAD_SILENCE_MS <= 0:
     raise ValueError("STEPFUN_VAD_SILENCE_DURATION_MS must be positive")
 
-_INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2"))
+# Minimum length of overlapping speech (s) that registers as an interruption.
+# The SDK default is 0.5; a noisy room (another talker, a TV) needs the higher
+# bar so transient noise does not cut off the agent mid-reply.
+_INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.5"))
 if not 0.05 <= _INTERRUPTION_DURATION <= 5.0:
     raise ValueError("STEPFUN_MIN_INTERRUPTION_DURATION must be between 0.05 and 5 seconds")
+
+# Noise-robust interruption handling. These are provider-agnostic: they use only
+# the local VAD and the StepFun STT, no LiveKit Inference.
+#   - resume_false_interruption: if an interruption is followed by silence with
+#     no confirming transcript, the agent RESUMES its reply instead of staying
+#     cut off. Requires an audio output that supports pause (room/telephony;
+#     console sinks ignore it and log a warning).
+#   - false_interruption_timeout: seconds of post-interruption silence before the
+#     interruption is classified false. "none"/"off" disables the resume path.
+#   - mode "adaptive" opts into LiveKit's ML interruption classifier (needs
+#     LiveKit Inference credentials + VAD + STT); "vad" (default) is the plain,
+#     deployment-agnostic strategy.
+_INTERRUPTION_MODE = (get("STEPFUN_INTERRUPTION_MODE", "vad") or "vad").strip().lower()
+if _INTERRUPTION_MODE not in ("vad", "adaptive"):
+    raise ValueError("STEPFUN_INTERRUPTION_MODE must be 'vad' or 'adaptive'")
+_RESUME_FALSE_INTERRUPTION = get_bool("STEPFUN_RESUME_FALSE_INTERRUPTION", True)
+_fit_raw = (get("STEPFUN_FALSE_INTERRUPTION_TIMEOUT", "2.0") or "").strip().lower()
+_FALSE_INTERRUPTION_TIMEOUT = None if _fit_raw in ("", "none", "off") else float(_fit_raw)
+
+# Local (Silero) VAD tuning. In batch/http mode this VAD is what segments audio
+# for recognize() and what fires interruptions, so it is the main lever for a
+# noisy room: raise the activation threshold (0.5 -> ~0.6-0.7) and min_speech so
+# background noise stops holding a segment open (which stalls ASR) and stops
+# triggering false interruptions. min_silence_duration here is the BATCH
+# endpointing silence; STEPFUN_VAD_SILENCE_DURATION_MS is the streaming
+# server-VAD's, a separate knob.
+_VAD_ACTIVATION_THRESHOLD = float(get("STEPFUN_VAD_ACTIVATION_THRESHOLD", "0.5"))
+if not 0.0 < _VAD_ACTIVATION_THRESHOLD < 1.0:
+    raise ValueError("STEPFUN_VAD_ACTIVATION_THRESHOLD must be between 0 and 1 (exclusive)")
+_VAD_MIN_SPEECH_MS = int(get("STEPFUN_VAD_MIN_SPEECH_MS", "50"))
+_VAD_MIN_SILENCE_MS = int(get("STEPFUN_VAD_MIN_SILENCE_MS", "550"))
+if _VAD_MIN_SPEECH_MS < 0 or _VAD_MIN_SILENCE_MS <= 0:
+    raise ValueError("STEPFUN_VAD_MIN_SPEECH_MS and STEPFUN_VAD_MIN_SILENCE_MS must be positive")
+_vad_deact_raw = (get("STEPFUN_VAD_DEACTIVATION_THRESHOLD", "") or "").strip()
+_VAD_DEACTIVATION_THRESHOLD = float(_vad_deact_raw) if _vad_deact_raw else None
+
+# Batch endpointing. The audio turn detector (v1-mini) is a streaming detector, so
+# the batch path inherits the streaming endpointing defaults (min_delay 0.3,
+# max_delay 2.5). min_delay is only a floor applied AFTER the detector's decision
+# (audio_recognition.py); because the decision already takes ~2.5 s on this corpus,
+# min_delay is never binding, so pinning it to 0.0 (as the streaming path does)
+# changes little. The real batch lever is max_delay: the detector rarely confirms
+# end-of-turn here, so each batch turn currently waits the full 2.5 s. Lower
+# STEPFUN_ENDPOINTING_MAX_DELAY to cut that, at the cost of committing before the
+# user has clearly finished (premature-turn risk) - benchmark WER + premature rate.
+_ENDPOINTING_MIN_DELAY = float(get("STEPFUN_ENDPOINTING_MIN_DELAY", "0.0"))
+_ENDPOINTING_MAX_DELAY = float(get("STEPFUN_ENDPOINTING_MAX_DELAY", "2.5"))
+if not 0.0 <= _ENDPOINTING_MIN_DELAY <= _ENDPOINTING_MAX_DELAY <= 10.0:
+    raise ValueError(
+        "STEPFUN_ENDPOINTING_MIN_DELAY/MAX_DELAY must satisfy 0 <= min <= max <= 10 seconds"
+    )
+
+# Batch turn detection. "vad" (default) relies purely on the local VAD + endpointing
+# delay - no semantic end-of-turn model. This is the default because the v1-mini
+# audio EOT model does not confirm end-of-turn on the eval corpus (it just waits
+# max_delay). "v1-mini" is the local model, "v1" is the LiveKit Inference cloud
+# model (needs LIVEKIT_API_KEY/SECRET, billed, agent-worker only) - kept for A/B
+# and to re-check whether either confirms EOT on real conversational audio.
+_TURN_DETECTOR_VERSION = get("STEPFUN_TURN_DETECTOR_VERSION", "vad")
+if _TURN_DETECTOR_VERSION not in ("vad", "v1-mini", "v1"):
+    raise ValueError("STEPFUN_TURN_DETECTOR_VERSION must be 'vad', 'v1-mini' or 'v1'")
 
 # The SDK closes the whole session once unrecoverable errors from stt, llm or
 # tts exceed this count. A provider blip — one dropped TTS websocket, say —
@@ -92,10 +156,11 @@ if not 1 <= _EVAL_MAX_CONSECUTIVE_FAILURES <= 100:
 
 def turn_handling() -> TurnHandlingOptions:
     interruption: InterruptionOptions = {
-        "mode": "vad",
+        "mode": _INTERRUPTION_MODE,
         "min_duration": _INTERRUPTION_DURATION,
         "min_words": 0,
-        "resume_false_interruption": False,
+        "resume_false_interruption": _RESUME_FALSE_INTERRUPTION,
+        "false_interruption_timeout": _FALSE_INTERRUPTION_TIMEOUT,
     }
     if _USE_STREAMING_ASR:
         return TurnHandlingOptions(
@@ -104,8 +169,17 @@ def turn_handling() -> TurnHandlingOptions:
             endpointing={"min_delay": 0.0},
         )
 
+    # "vad" = pure VAD endpointing (no semantic EOT model); otherwise a turn
+    # detector object. v1-mini/v1 rarely confirm on this corpus, so vad is default.
+    turn_detection = (
+        "vad"
+        if _TURN_DETECTOR_VERSION == "vad"
+        else inference.TurnDetector(version=_TURN_DETECTOR_VERSION)
+    )
     return TurnHandlingOptions(
-        turn_detection=inference.TurnDetector(version="v1-mini"), interruption=interruption
+        turn_detection=turn_detection,
+        interruption=interruption,
+        endpointing={"min_delay": _ENDPOINTING_MIN_DELAY, "max_delay": _ENDPOINTING_MAX_DELAY},
     )
 
 
@@ -120,7 +194,14 @@ class Assistant(InstrumentedAgent):
 def prewarm(proc: JobProcess) -> None:
     """Load local VAD weights before the first session."""
     if _USE_LOCAL_VAD:
-        proc.userdata["vad"] = silero.VAD.load()
+        vad_kwargs: dict[str, float] = {
+            "activation_threshold": _VAD_ACTIVATION_THRESHOLD,
+            "min_speech_duration": _VAD_MIN_SPEECH_MS / 1000.0,
+            "min_silence_duration": _VAD_MIN_SILENCE_MS / 1000.0,
+        }
+        if _VAD_DEACTIVATION_THRESHOLD is not None:
+            vad_kwargs["deactivation_threshold"] = _VAD_DEACTIVATION_THRESHOLD
+        proc.userdata["vad"] = silero.VAD.load(**vad_kwargs)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -131,6 +212,23 @@ async def entrypoint(ctx: JobContext) -> None:
         _NOISE_CANCELLATION,
         _INTERRUPTION_DURATION,
     )
+    logger.info(
+        "turn handling: interruption_mode=%s resume_false=%s false_timeout=%s "
+        "vad(threshold=%.2f min_speech=%dms min_silence=%dms)",
+        _INTERRUPTION_MODE,
+        _RESUME_FALSE_INTERRUPTION,
+        _FALSE_INTERRUPTION_TIMEOUT,
+        _VAD_ACTIVATION_THRESHOLD,
+        _VAD_MIN_SPEECH_MS,
+        _VAD_MIN_SILENCE_MS,
+    )
+    if not _USE_STREAMING_ASR:
+        logger.info(
+            "batch turn detection: %s | endpointing min_delay=%.2fs max_delay=%.2fs",
+            _TURN_DETECTOR_VERSION,
+            _ENDPOINTING_MIN_DELAY,
+            _ENDPOINTING_MAX_DELAY,
+        )
     # Per-session native state: never share a denoiser across callers.
     from _noise_cancellation import FilteredAudioInput, NoiseSuppressor
 
@@ -215,7 +313,15 @@ async def entrypoint(ctx: JobContext) -> None:
                 "prewarm": _PREWARM,
                 "vad_silence_duration_ms": _VAD_SILENCE_MS,
                 "min_interruption_duration_s": _INTERRUPTION_DURATION,
-                "turn_detection": "stt" if _USE_STREAMING_ASR else "v1-mini",
+                "interruption_mode": _INTERRUPTION_MODE,
+                "resume_false_interruption": _RESUME_FALSE_INTERRUPTION,
+                "false_interruption_timeout_s": _FALSE_INTERRUPTION_TIMEOUT,
+                "vad_activation_threshold": _VAD_ACTIVATION_THRESHOLD,
+                "vad_min_speech_ms": _VAD_MIN_SPEECH_MS,
+                "vad_min_silence_ms": _VAD_MIN_SILENCE_MS,
+                "endpointing_min_delay_s": _ENDPOINTING_MIN_DELAY,
+                "endpointing_max_delay_s": _ENDPOINTING_MAX_DELAY,
+                "turn_detection": "stt" if _USE_STREAMING_ASR else _TURN_DETECTOR_VERSION,
             },
         )
         ctx.add_shutdown_callback(evaluation.aclose)
