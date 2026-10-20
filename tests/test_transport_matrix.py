@@ -5,11 +5,11 @@ agent just decides when a turn ended based on the wrong signal. These tests
 drive the real `entrypoint()` so the matrix is the example's own configuration,
 not a paraphrase of it.
 
-    transport | local VAD | endpointing owner | interruption source
-    ----------+-----------+-------------------+--------------------
-    websocket | on        | StepFun server    | local VAD
-    websocket | off       | StepFun server    | server transcript
-    http      | forced on | local VAD+detector| local VAD
+    transport | local VAD | endpointing owner      | interruption source
+    ----------+-----------+------------------------+--------------------
+    websocket | on        | StepFun server         | local VAD
+    websocket | off       | StepFun server         | server transcript
+    http      | forced on | local VAD + endpointing | local VAD
 """
 
 from __future__ import annotations
@@ -36,6 +36,23 @@ def load_agent(monkeypatch):
     monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
     monkeypatch.delenv("STEPFUN_EVAL_PORT", raising=False)
     monkeypatch.setenv("STEPFUN_PREWARM", "false")
+    # Pin to the code defaults so a developer's .env does not change the matrix.
+    # load_env() uses override=False, so a value already set here wins over .env.
+    for _var, _val in (
+        ("STEPFUN_TURN_DETECTOR_VERSION", "vad"),
+        ("STEPFUN_MIN_INTERRUPTION_DURATION", "0.5"),
+        ("STEPFUN_INTERRUPTION_MODE", "vad"),
+        ("STEPFUN_RESUME_FALSE_INTERRUPTION", "true"),
+        ("STEPFUN_FALSE_INTERRUPTION_TIMEOUT", "2.0"),
+        ("STEPFUN_ENDPOINTING_MIN_DELAY", "0.0"),
+        ("STEPFUN_ENDPOINTING_MAX_DELAY", "2.5"),
+        ("STEPFUN_STT_SAMPLE_RATE", "16000"),
+        ("STEPFUN_VAD_SILENCE_DURATION_MS", "800"),
+        ("STEPFUN_VAD_ACTIVATION_THRESHOLD", "0.5"),
+        ("STEPFUN_VAD_MIN_SPEECH_MS", "50"),
+        ("STEPFUN_VAD_MIN_SILENCE_MS", "550"),
+    ):
+        monkeypatch.setenv(_var, _val)
 
     def load(*, transport="websocket", local_vad="true", noise="off"):
         monkeypatch.setenv("STEPFUN_ASR_TRANSPORT", transport)
@@ -125,7 +142,7 @@ def test_local_vad_is_present_exactly_when_endpointing_needs_it(
 
     # prewarm() is what decides whether VAD weights are loaded at all.
     proc = SimpleNamespace(userdata={})
-    monkeypatch.setattr(module.silero.VAD, "load", lambda: "VAD_WEIGHTS")
+    monkeypatch.setattr(module.silero.VAD, "load", lambda **_kwargs: "VAD_WEIGHTS")
     module.prewarm(proc)
     assert ("vad" in proc.userdata) is expect_vad_in_session
 
@@ -151,9 +168,9 @@ def test_local_vad_is_present_exactly_when_endpointing_needs_it(
         # The server's endpointing is authoritative: no local turn model, and
         # no added endpointing delay on top of the server's decision.
         ("websocket", "stt"),
-        # Batch has no server signal, so a local end-of-turn model plus the
-        # default endpointing delay decides.
-        ("http", "detector"),
+        # Batch default is pure VAD + endpointing (no semantic EOT model); the
+        # endpointing delay is the effective end-of-turn cost.
+        ("http", "vad"),
     ],
 )
 def test_endpointing_is_owned_by_the_server_or_a_local_detector(load_agent, transport, expected):
@@ -166,9 +183,21 @@ def test_endpointing_is_owned_by_the_server_or_a_local_detector(load_agent, tran
             "a local delay would stack on top of the server's endpointing"
         )
     else:
-        detection = options["turn_detection"]
-        assert detection is not None and detection != "stt"
-        assert getattr(detection, "model", "").startswith("turn-detector"), detection
+        assert options["turn_detection"] == "vad"
+        # In vad mode the endpointing delay decides when the turn commits.
+        assert options["endpointing"]["min_delay"] == 0.0
+        assert options["endpointing"]["max_delay"] == 2.5
+
+
+def test_batch_can_opt_into_a_semantic_turn_detector(load_agent, monkeypatch):
+    """vad is the default; v1-mini/v1 remain selectable for A/B and add a
+    detector object plus the endpointing delays on top."""
+    monkeypatch.setenv("STEPFUN_TURN_DETECTOR_VERSION", "v1-mini")
+    module = load_agent(transport="http")
+    options = module.turn_handling()
+    detection = options["turn_detection"]
+    assert getattr(detection, "model", "") == "turn-detector-v1-mini", detection
+    assert options["endpointing"]["max_delay"] == 2.5
 
 
 @pytest.mark.parametrize("transport", ["websocket", "http"])
@@ -182,8 +211,9 @@ def test_interruption_always_uses_local_vad(load_agent, transport):
     module = load_agent(transport=transport)
     interruption = module.turn_handling()["interruption"]
     assert interruption["mode"] == "vad"
-    assert interruption["min_duration"] == 0.2
-    assert interruption["resume_false_interruption"] is False
+    assert interruption["min_duration"] == 0.5
+    assert interruption["resume_false_interruption"] is True
+    assert interruption["false_interruption_timeout"] == 2.0
 
 
 # -- server VAD is only asked for when streaming ---------------------------
@@ -223,8 +253,9 @@ def test_noise_filter_wraps_whatever_input_start_selected(
     single forward task, so replacing input.audio is what makes the filter
     apply to all three rather than only to recognition.
     """
-    noise_module = pytest.importorskip("examples._noise_cancellation")
+    noise_module = pytest.importorskip("_noise_cancellation")
     processor = MagicMock()
+    processor.method = noise  # so the FilteredAudioInput label carries the backend
     monkeypatch.setattr(noise_module, "NoiseSuppressor", lambda **_kwargs: processor)
     module = load_agent(transport=transport, noise=noise)
 
@@ -233,12 +264,13 @@ def test_noise_filter_wraps_whatever_input_start_selected(
     )
     _run(module.entrypoint(ctx))
 
+    # Input chain is source -> NC -> resample-to-16k; the resampler is outermost.
     wrapped = session.input.audio
-    assert wrapped is not None and wrapped is not selected_input, (
-        "the raw input must be replaced by the filter"
-    )
-    assert getattr(wrapped, "source", None) is selected_input
-    assert noise in wrapped.label.lower(), wrapped.label
+    assert isinstance(wrapped, noise_module.ResamplingAudioInput), wrapped
+    filtered = wrapped.source
+    assert isinstance(filtered, noise_module.FilteredAudioInput), filtered
+    assert filtered.source is selected_input
+    assert noise in filtered.label.lower(), filtered.label
 
     # The denoiser must be released on shutdown, not leaked per call.
     assert callbacks, "a shutdown callback should own the denoiser"
@@ -249,13 +281,16 @@ def test_noise_filter_wraps_whatever_input_start_selected(
 
 
 @pytest.mark.parametrize("transport", ["websocket", "http"])
-def test_noise_off_leaves_the_input_untouched(load_agent, monkeypatch, transport):
+def test_noise_off_still_downsamples_to_the_asr_rate(load_agent, monkeypatch, transport):
+    noise_module = pytest.importorskip("_noise_cancellation")
     module = load_agent(transport=transport, noise="off")
     session, _factory, _callbacks, ctx, selected_input = _run_entrypoint(
         module, monkeypatch, vad_present=True
     )
     _run(module.entrypoint(ctx))
-    assert session.input.audio is selected_input
+    wrapped = session.input.audio
+    assert isinstance(wrapped, noise_module.ResamplingAudioInput), wrapped
+    assert wrapped.source is selected_input
 
 
 def test_unknown_noise_backend_is_rejected_at_import(load_agent):

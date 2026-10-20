@@ -656,6 +656,37 @@ async def test_recognize_posts_nested_pcm_body() -> None:
     assert event.recognition_usage.audio_duration == pytest.approx(0.2)
 
 
+async def test_recognize_resamples_high_rate_input_to_stt_rate() -> None:
+    # The VAD hands batch segments over at the input rate (e.g. 48 kHz). The
+    # plugin must resample to the STT's sample_rate so the upload matches the
+    # streaming path instead of shipping ~3x the bytes.
+    session = _FakeSSESession(
+        [
+            'data: {"type":"transcript.text.done","text":"hi",'
+            '"meta":{"session_id":"sse-rs"},"usage":{"input_tokens":1,"output_tokens":1}}',
+        ]
+    )
+    s = stepfun.STT(http_session=session)  # type: ignore[arg-type]  # sample_rate=16000
+
+    samples_48k = 48000 * 200 // 1000  # 200 ms at 48 kHz
+    frame_48k = rtc.AudioFrame(
+        data=b"\x00\x00" * samples_48k,
+        sample_rate=48000,
+        num_channels=1,
+        samples_per_channel=samples_48k,
+    )
+    await s.recognize([frame_48k])
+
+    audio = session.json["audio"]
+    assert audio["input"]["format"]["rate"] == _SAMPLE_RATE  # 16000, not 48000
+    decoded = _utils.b64_to_pcm(audio["data"])
+    samples_out = len(decoded) // 2
+    # ~200 ms at 16 kHz = 3200 samples (resampler padding allows a little slack),
+    # and strictly smaller than the 48 kHz input.
+    assert samples_out < samples_48k
+    assert samples_out == pytest.approx(3200, rel=0.1)
+
+
 async def test_recognize_falls_back_to_accumulated_deltas() -> None:
     # A done event that omits `text` should not lose the transcript.
     session = _FakeSSESession(

@@ -91,9 +91,68 @@ _VAD_SILENCE_MS = int(get("STEPFUN_VAD_SILENCE_DURATION_MS", "800"))
 if _VAD_SILENCE_MS <= 0:
     raise ValueError("STEPFUN_VAD_SILENCE_DURATION_MS must be positive")
 
-_INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.2"))
+# Local (Silero) VAD tuning. Governs batch segmentation and interruptions. Raise
+# the activation threshold (0.5 -> ~0.6-0.7) and min_speech in a noisy room so
+# background noise stops holding a segment open (which stalls ASR) and stops
+# false barge-in. min_silence here is the BATCH endpointing silence (distinct from
+# STEPFUN_VAD_SILENCE_DURATION_MS, the streaming server-VAD's).
+_VAD_ACTIVATION_THRESHOLD = float(get("STEPFUN_VAD_ACTIVATION_THRESHOLD", "0.5"))
+if not 0.0 < _VAD_ACTIVATION_THRESHOLD < 1.0:
+    raise ValueError("STEPFUN_VAD_ACTIVATION_THRESHOLD must be between 0 and 1 (exclusive)")
+_VAD_MIN_SPEECH_MS = int(get("STEPFUN_VAD_MIN_SPEECH_MS", "50"))
+_VAD_MIN_SILENCE_MS = int(get("STEPFUN_VAD_MIN_SILENCE_MS", "550"))
+if _VAD_MIN_SPEECH_MS < 0 or _VAD_MIN_SILENCE_MS <= 0:
+    raise ValueError("STEPFUN_VAD_MIN_SPEECH_MS and STEPFUN_VAD_MIN_SILENCE_MS must be positive")
+_vad_deact_raw = (get("STEPFUN_VAD_DEACTIVATION_THRESHOLD", "") or "").strip()
+_VAD_DEACTIVATION_THRESHOLD = float(_vad_deact_raw) if _vad_deact_raw else None
+
+# ASR rate and the post-noise-cancellation downsample target. 16 kHz is the
+# VAD/turn-detector/ASR standard and sufficient for speech; the 48 kHz input is
+# resampled to it (noise cancellation stays at 48 kHz).
+_STT_SAMPLE_RATE = int(get("STEPFUN_STT_SAMPLE_RATE", "16000"))
+if _STT_SAMPLE_RATE <= 0:
+    raise ValueError("STEPFUN_STT_SAMPLE_RATE must be positive")
+
+# Batch endpointing delays (s). In vad mode min_delay is the effective end-of-turn
+# cost (a fixed silence floor after the VAD closes the segment); max_delay only
+# binds when a semantic detector is active and does not confirm.
+_ENDPOINTING_MIN_DELAY = float(get("STEPFUN_ENDPOINTING_MIN_DELAY", "0.0"))
+_ENDPOINTING_MAX_DELAY = float(get("STEPFUN_ENDPOINTING_MAX_DELAY", "2.5"))
+if not 0.0 <= _ENDPOINTING_MIN_DELAY <= _ENDPOINTING_MAX_DELAY <= 10.0:
+    raise ValueError(
+        "STEPFUN_ENDPOINTING_MIN_DELAY/MAX_DELAY must satisfy 0 <= min <= max <= 10 seconds"
+    )
+
+# Batch turn detection. "vad" (default) is pure VAD + endpointing, no semantic EOT
+# model (the local v1-mini model does not reliably confirm end-of-turn). "v1-mini"
+# is the local model; "v1" is the LiveKit Inference cloud model (needs
+# LIVEKIT_API_KEY/SECRET, billed, agent-worker only) - kept for A/B. Streaming
+# mode always uses server-VAD ("stt") and ignores this.
+_TURN_DETECTOR_VERSION = get("STEPFUN_TURN_DETECTOR_VERSION", "vad")
+if _TURN_DETECTOR_VERSION not in ("vad", "v1-mini", "v1"):
+    raise ValueError("STEPFUN_TURN_DETECTOR_VERSION must be 'vad', 'v1-mini' or 'v1'")
+
+# Min length (s) of overlapping speech that registers as a barge-in. The SDK
+# default is 0.5; a noisy room needs the higher bar so transient noise does not
+# cut off the reply.
+_INTERRUPTION_DURATION = float(get("STEPFUN_MIN_INTERRUPTION_DURATION", "0.5"))
 if not 0.05 <= _INTERRUPTION_DURATION <= 5.0:
     raise ValueError("STEPFUN_MIN_INTERRUPTION_DURATION must be between 0.05 and 5 seconds")
+
+# Noise-robust interruption handling (provider-agnostic: VAD + StepFun STT only).
+#   - resume_false_interruption: if an interruption is followed by silence with no
+#     confirming transcript, the agent RESUMES its reply. Needs a pause-capable
+#     audio output (room/telephony; console sinks ignore it).
+#   - false_interruption_timeout: seconds of post-interruption silence before it is
+#     classified false; "none"/"off" disables the resume path.
+#   - mode "adaptive" opts into LiveKit's ML interruption classifier (needs LiveKit
+#     Inference credentials); "vad" (default) is deployment-agnostic.
+_INTERRUPTION_MODE = (get("STEPFUN_INTERRUPTION_MODE", "vad") or "vad").strip().lower()
+if _INTERRUPTION_MODE not in ("vad", "adaptive"):
+    raise ValueError("STEPFUN_INTERRUPTION_MODE must be 'vad' or 'adaptive'")
+_RESUME_FALSE_INTERRUPTION = get_bool("STEPFUN_RESUME_FALSE_INTERRUPTION", True)
+_fit_raw = (get("STEPFUN_FALSE_INTERRUPTION_TIMEOUT", "2.0") or "").strip().lower()
+_FALSE_INTERRUPTION_TIMEOUT = None if _fit_raw in ("", "none", "off") else float(_fit_raw)
 
 # off | webrtc | rnnoise. Filtering happens before the session fans audio out to
 # STT, VAD and turn detection, so all three see the same cleaned signal.
@@ -128,10 +187,11 @@ def turn_handling() -> TurnHandlingOptions:
     one locally.
     """
     interruption: InterruptionOptions = {
-        "mode": "vad",
+        "mode": _INTERRUPTION_MODE,
         "min_duration": _INTERRUPTION_DURATION,
         "min_words": 0,
-        "resume_false_interruption": False,
+        "resume_false_interruption": _RESUME_FALSE_INTERRUPTION,
+        "false_interruption_timeout": _FALSE_INTERRUPTION_TIMEOUT,
     }
     if _USE_STREAMING_ASR:
         return TurnHandlingOptions(
@@ -140,8 +200,17 @@ def turn_handling() -> TurnHandlingOptions:
             endpointing={"min_delay": 0.0},
         )
 
+    # "vad" = pure VAD endpointing (no semantic EOT model); otherwise a turn
+    # detector object.
+    turn_detection = (
+        "vad"
+        if _TURN_DETECTOR_VERSION == "vad"
+        else inference.TurnDetector(version=_TURN_DETECTOR_VERSION)
+    )
     return TurnHandlingOptions(
-        turn_detection=inference.TurnDetector(version="v1-mini"), interruption=interruption
+        turn_detection=turn_detection,
+        interruption=interruption,
+        endpointing={"min_delay": _ENDPOINTING_MIN_DELAY, "max_delay": _ENDPOINTING_MAX_DELAY},
     )
 
 
@@ -152,7 +221,14 @@ def prewarm(proc: JobProcess) -> None:
     caller's first sentence.
     """
     if _USE_LOCAL_VAD:
-        proc.userdata["vad"] = silero.VAD.load()
+        vad_kwargs: dict[str, float] = {
+            "activation_threshold": _VAD_ACTIVATION_THRESHOLD,
+            "min_speech_duration": _VAD_MIN_SPEECH_MS / 1000.0,
+            "min_silence_duration": _VAD_MIN_SILENCE_MS / 1000.0,
+        }
+        if _VAD_DEACTIVATION_THRESHOLD is not None:
+            vad_kwargs["deactivation_threshold"] = _VAD_DEACTIVATION_THRESHOLD
+        proc.userdata["vad"] = silero.VAD.load(**vad_kwargs)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -165,6 +241,7 @@ async def entrypoint(ctx: JobContext) -> None:
         # which beats a fixed silence threshold.
         server_vad=True,
         vad_silence_duration_ms=_VAD_SILENCE_MS,
+        sample_rate=_STT_SAMPLE_RATE,
     )
     tts = stepfun.TTS(
         model=_TTS_MODEL,
@@ -200,9 +277,9 @@ async def entrypoint(ctx: JobContext) -> None:
     # between callers, so it is built here rather than at module scope.
     denoiser = None
     filtered_input = None
-    if _NOISE_CANCELLATION != "off":
-        from _noise_cancellation import FilteredAudioInput, NoiseSuppressor
+    from _noise_cancellation import FilteredAudioInput, NoiseSuppressor, ResamplingAudioInput
 
+    if _NOISE_CANCELLATION != "off":
         denoiser = NoiseSuppressor(method=_NOISE_CANCELLATION)
 
     async def _close_denoiser() -> None:
@@ -241,6 +318,12 @@ async def entrypoint(ctx: JobContext) -> None:
             else:
                 filtered_input = FilteredAudioInput(session.input.audio, processor=denoiser)
                 session.input.audio = filtered_input
+        # Downsample to the ASR rate after noise cancellation (NC must run at
+        # 48 kHz) so the VAD, turn detector, and ASR all work at one lower rate.
+        if session.input.audio is not None:
+            session.input.audio = ResamplingAudioInput(
+                session.input.audio, sample_rate=_STT_SAMPLE_RATE
+            )
     except BaseException:
         # start() failed: the shutdown callback may never run.
         await _close_denoiser()

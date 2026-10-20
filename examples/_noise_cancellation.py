@@ -208,3 +208,55 @@ class FilteredAudioInput(io.AudioInput):
         self._processor.close()
         if not self._ended:
             self._pending.clear()
+
+
+class ResamplingAudioInput(io.AudioInput):
+    """Downsample any LiveKit audio input to a target rate.
+
+    Placed after noise cancellation (which must run at 48 kHz) so the VAD, turn
+    detector, and ASR downstream all operate at one lower rate (16 kHz): smaller
+    segment buffers, and the batch ASR upload already matches. Passthrough when
+    the source is already at the target rate.
+    """
+
+    def __init__(self, source: io.AudioInput, *, sample_rate: int) -> None:
+        super().__init__(label=f"Resample to {sample_rate} Hz", source=source)
+        self._upstream = source
+        self._target = sample_rate
+        self._resampler: rtc.AudioResampler | None = None
+        self._pending: deque[rtc.AudioFrame] = deque()
+        self._ended = False
+        self._closed = False
+
+    def _resample(self, frame: rtc.AudioFrame) -> list[rtc.AudioFrame]:
+        if frame.sample_rate == self._target:
+            return [frame]
+        if self._resampler is None:
+            self._resampler = rtc.AudioResampler(
+                frame.sample_rate, self._target, num_channels=frame.num_channels
+            )
+        return list(self._resampler.push(frame))
+
+    async def __anext__(self) -> rtc.AudioFrame:
+        try:
+            return await self._read_frame()
+        except Exception:
+            await self.aclose()
+            raise
+
+    async def _read_frame(self) -> rtc.AudioFrame:
+        while not self._pending:
+            if self._ended or self._closed:
+                raise StopAsyncIteration
+            try:
+                frame = await self._upstream.__anext__()
+            except StopAsyncIteration:
+                self._ended = True
+                if self._resampler is not None:
+                    self._pending.extend(self._resampler.flush())
+            else:
+                self._pending.extend(self._resample(frame))
+        return self._pending.popleft()
+
+    async def aclose(self) -> None:
+        self._closed = True

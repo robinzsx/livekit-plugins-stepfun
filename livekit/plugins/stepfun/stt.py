@@ -128,6 +128,8 @@ class STT(stt.STT):
             base_url: Override the WebSocket base URL.
             http_base_url: Override the HTTP base URL.
             sample_rate: Streaming input rate; LiveKit resamples incoming audio.
+                Batch recognize() also resamples VAD segments to this rate before
+                upload, so a lower rate (16 kHz default) cuts the request size.
             prompt: Context hints for streaming recognition.
             hotwords: Batch recognition hints on the mainland-China cluster.
             enable_itn: Enable inverse text normalization.
@@ -318,6 +320,22 @@ class STT(stt.STT):
             opts.language = language
 
         frame = rtc.combine_audio_frames(buffer)
+
+        # The VAD hands batch segments over at the input rate (e.g. 48 kHz), and
+        # uploading that native-rate PCM makes the request ~2x slower than 16 kHz
+        # with no accuracy gain on speech. Resample to the configured STT rate so
+        # the batch path matches streaming (which already sends opts.sample_rate).
+        # No-op when the caller deliberately set sample_rate to the input rate.
+        if frame.sample_rate != self._opts.sample_rate:
+            resampler = rtc.AudioResampler(
+                frame.sample_rate,
+                self._opts.sample_rate,
+                num_channels=frame.num_channels,
+            )
+            resampled = list(resampler.push(frame))
+            resampled.extend(resampler.flush())
+            if resampled:
+                frame = rtc.combine_audio_frames(resampled)
 
         transcription: dict[str, Any] = {
             "model": opts.batch_model,
